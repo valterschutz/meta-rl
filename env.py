@@ -5,7 +5,7 @@ import tqdm
 
 from tensordict import TensorDict, TensorDictBase
 
-from torchrl.data import Bounded, Composite, Unbounded
+from torchrl.data import Bounded, Composite, Unbounded, Categorical
 from torchrl.envs import (
     EnvBase,
 )
@@ -37,11 +37,13 @@ def make_composite_from_td(td):
 class ToyEnv(EnvBase):
     batch_locked = False
 
-    def __init__(self, td_params=None, seed=None, device="cpu"):
-        if td_params is None:
-            td_params = self.gen_params()
-
+    def __init__(self, n_pos, seed=None, device="cpu"):
         super().__init__(device=device, batch_size=[])
+
+        self.n_pos = n_pos
+
+        td_params = self.gen_params(n_pos)
+
         self._make_spec(td_params)
         if seed is None:
             seed = torch.empty((), dtype=torch.int64).random_().item()
@@ -49,17 +51,22 @@ class ToyEnv(EnvBase):
 
     def _make_spec(self, td_params):
         self.observation_spec = Composite(
-            state=Bounded(low=0, high=3, shape=(), dtype=torch.int, domain="discrete"),
+            # state=Bounded(low=0, high=, shape=(), dtype=torch.int, domain="discrete"),
+            pos=Categorical(td_params["params", "n_pos"]).to_one_hot_spec(),
             params=make_composite_from_td(td_params["params"]),
             shape=(),
         )
-        self.state_spec = self.observation_spec.clone()
-        self.action_spec = Bounded(
-            low=0,
-            high=3,
-            shape=(),
-            dtype=torch.int,
+        # self.state_spec = self.observation_spec.clone()
+        self.state_spec = Composite(
+            pos=Categorical(td_params["params", "n_pos"]).to_one_hot_spec(), shape=()
         )
+        # self.action_spec = Bounded(
+        #     low=0,
+        #     high=3,
+        #     shape=(),
+        #     dtype=torch.int,
+        # )
+        self.action_spec = Categorical(4).to_one_hot_spec()
         self.reward_spec = Unbounded(
             shape=(*td_params.shape, 1),  # WHY
             dtype=torch.int,
@@ -67,14 +74,14 @@ class ToyEnv(EnvBase):
         )
 
     @staticmethod
-    def gen_params(batch_size=None) -> TensorDictBase:
+    def gen_params(n_pos, batch_size=None) -> TensorDictBase:
         """Returns a ``tensordict`` containing the physical parameters such as gravitational force and torque or speed limits."""
         if batch_size is None:
             batch_size = []
         td = TensorDict(
             {
                 "params": TensorDict(
-                    {"x": 1, "y": 3},
+                    {"x": 1, "y": 3, "n_pos": n_pos, "big_reward": 100},
                     [],
                 )
             },
@@ -86,18 +93,21 @@ class ToyEnv(EnvBase):
 
     _make_spec = _make_spec
 
-    def _reset(self, tensordict):
-        if tensordict is None or tensordict.is_empty():
-            tensordict = self.gen_params(batch_size=self.batch_size)
+    def _reset(self, td):
+        if td is None or td.is_empty():
+            td = self.gen_params(self.n_pos, batch_size=self.batch_size)
 
-        state = torch.zeros(tensordict.shape, device=self.device, dtype=torch.int)
+        pos = torch.zeros(td.shape, device=self.device, dtype=torch.long)
+        # Convert into OneHot
+        pos = torch.nn.functional.one_hot(pos, td["params", "n_pos"]).to(bool)
+        print(f"at reset: {pos.shape=}")
 
         out = TensorDict(
             {
-                "state": state,
-                "params": tensordict["params"],
+                "pos": pos,
+                "params": td["params"],
             },
-            batch_size=tensordict.shape,
+            batch_size=td.shape,
         )
         return out
 
@@ -106,65 +116,78 @@ class ToyEnv(EnvBase):
         self.rng = rng
 
     @staticmethod
-    def _step(tensordict):
-        state = tensordict["state"]
-        action = tensordict["action"]
-        x, y = tensordict["params", "x"], tensordict["params", "y"]
+    def _step(td):
+        pos = td["pos"]
+        print(f"before argmax: {pos.shape=}")
+        action = td["action"]
+        print(f"action: {action.shape=}")
+        x, y, n_pos, big_reward = (
+            td["params", "x"],
+            td["params", "y"],
+            td["params", "n_pos"],
+            td["params", "big_reward"],
+        )
 
-        # If the state is 1 and the action is 1, the reward is -x
-        next_state = (
-            state.clone()
-        )  # If no next state is defined, the next state is the same as the current state
+        # Convert pos and action from OneHot to integers
+        pos = torch.argmax(pos.to(torch.long), dim=-1)
+        # print(f"after argmax: {pos.shape=}")
+        action = torch.argmax(action.to(torch.long), dim=-1)
+
+        # If the pos is 1 and the action is 1, the reward is -x
+        next_pos = (
+            pos.clone()
+        )  # If no next pos is defined, the next pos is the same as the current pos
         reward = torch.zeros_like(
-            state, dtype=torch.int
+            pos, dtype=torch.int
         )  # If no reward is defined, the reward is 0
 
-        # TODO: define these somewhere else
-        n_states = 5
-        big_reward = 100
-
-        mask_start = state == 0
-        mask_end = state == n_states
-        mask_even = state % 2 == 0
+        mask_start = pos == 0
+        mask_end = pos == n_pos
+        mask_even = pos % 2 == 0
 
         # Enable left action by default
-        next_state = torch.where(action == 0, state - 1, next_state)
+        next_pos = torch.where(action == 0, pos - 1, next_pos)
         reward = torch.where(action == 0, -x.to(torch.int), reward)
         # Enable right action by default
-        next_state = torch.where(action == 1, state + 1, next_state)
+        next_pos = torch.where(action == 1, pos + 1, next_pos)
         reward = torch.where(action == 1, -x.to(torch.int), reward)
 
-        # For even states, enable down and up actions
+        # For even poss, enable down and up actions
         # Down action
-        next_state = torch.where(mask_even & (action == 2), state - 2, next_state)
+        next_pos = torch.where(mask_even & (action == 2), pos - 2, next_pos)
         reward = torch.where(mask_even & (action == 2), -y.to(torch.int), reward)
         # Up action
-        next_state = torch.where(mask_even & (action == 3), state + 2, next_state)
+        next_pos = torch.where(mask_even & (action == 3), pos + 2, next_pos)
         reward = torch.where(mask_even & (action == 3), -y.to(torch.int), reward)
 
-        # For starting state, disable left action
-        next_state = torch.where(mask_start & (action == 0), state, next_state)
+        # For starting pos, disable left action
+        next_pos = torch.where(mask_start & (action == 0), pos, next_pos)
         reward = torch.where(mask_start & (action == 0), 0, reward)
-        # For starting state, disable down action
-        next_state = torch.where(mask_start & (action == 2), state, next_state)
+        # For starting pos, disable down action
+        next_pos = torch.where(mask_start & (action == 2), pos, next_pos)
         reward = torch.where(mask_start & (action == 2), 0, reward)
 
-        # For end state, disable right action
-        next_state = torch.where(mask_end & (action == 1), state, next_state)
+        # For end pos, disable right action
+        next_pos = torch.where(mask_end & (action == 1), pos, next_pos)
         reward = torch.where(mask_end & (action == 1), 0, reward)
-        # End state is done
+        # End pos is done
         done = torch.where(mask_end, 1.0, 0.0).to(torch.bool)
 
-        # Big reward for reaching the end state
-        reward = torch.where(mask_end, big_reward, reward)
+        # Big reward for reaching the end pos
+        reward = torch.where(mask_end, big_reward, reward).to(torch.int)
+
+        # print(f"before one_hot: {next_pos.shape=}")
+        # Convert next_pos into OneHot
+        next_pos = torch.nn.functional.one_hot(next_pos, n_pos).to(bool)
+        # print(f"after one_hot: {next_pos.shape=}")
 
         out = TensorDict(
             {
-                "state": next_state,
-                "params": tensordict["params"],
+                "pos": next_pos,
+                "params": td["params"],
                 "reward": reward,
                 "done": done,
             },
-            tensordict.shape,
+            td.shape,
         )
         return out
