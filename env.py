@@ -52,13 +52,13 @@ class ToyEnv(EnvBase):
     def _make_spec(self, td_params):
         self.observation_spec = Composite(
             # state=Bounded(low=0, high=, shape=(), dtype=torch.int, domain="discrete"),
-            pos=Categorical(td_params["params", "n_pos"]).to_one_hot_spec(),
+            pos=Categorical(td_params["params", "n_pos"]),
             params=make_composite_from_td(td_params["params"]),
             shape=(),
         )
         # self.state_spec = self.observation_spec.clone()
         self.state_spec = Composite(
-            pos=Categorical(td_params["params", "n_pos"]).to_one_hot_spec(), shape=()
+            pos=Categorical(td_params["params", "n_pos"]), shape=()
         )
         # self.action_spec = Bounded(
         #     low=0,
@@ -66,7 +66,7 @@ class ToyEnv(EnvBase):
         #     shape=(),
         #     dtype=torch.int,
         # )
-        self.action_spec = Categorical(4).to_one_hot_spec()
+        self.action_spec = Categorical(4)
         self.reward_spec = Unbounded(
             shape=(*td_params.shape, 1),  # WHY
             dtype=torch.int,
@@ -99,7 +99,7 @@ class ToyEnv(EnvBase):
 
         pos = torch.zeros(td.shape, device=self.device, dtype=torch.long)
         # Convert into OneHot
-        pos = torch.nn.functional.one_hot(pos, td["params", "n_pos"]).to(bool)
+        # pos = torch.nn.functional.one_hot(pos, td["params", "n_pos"])
         print(f"at reset: {pos.shape=}")
 
         out = TensorDict(
@@ -118,9 +118,9 @@ class ToyEnv(EnvBase):
     @staticmethod
     def _step(td):
         pos = td["pos"]
-        print(f"before argmax: {pos.shape=}")
+        # print(f"before argmax: {pos.shape=}")
         action = td["action"]
-        print(f"action: {action.shape=}")
+        # print(f"action: {action.shape=}")
         x, y, n_pos, big_reward = (
             td["params", "x"],
             td["params", "y"],
@@ -129,9 +129,9 @@ class ToyEnv(EnvBase):
         )
 
         # Convert pos and action from OneHot to integers
-        pos = torch.argmax(pos.to(torch.long), dim=-1)
+        # pos = torch.argmax(pos.to(torch.long), dim=-1)
         # print(f"after argmax: {pos.shape=}")
-        action = torch.argmax(action.to(torch.long), dim=-1)
+        # action = torch.argmax(action.to(torch.long), dim=-1)
 
         # If the pos is 1 and the action is 1, the reward is -x
         next_pos = (
@@ -178,7 +178,7 @@ class ToyEnv(EnvBase):
 
         # print(f"before one_hot: {next_pos.shape=}")
         # Convert next_pos into OneHot
-        next_pos = torch.nn.functional.one_hot(next_pos, n_pos).to(bool)
+        # next_pos = torch.nn.functional.one_hot(next_pos, n_pos)
         # print(f"after one_hot: {next_pos.shape=}")
 
         out = TensorDict(
