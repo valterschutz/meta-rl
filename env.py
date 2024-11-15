@@ -37,14 +37,21 @@ def make_composite_from_td(td):
 class ToyEnv(EnvBase):
     batch_locked = False
 
-    def __init__(self, n_pos, seed=None, device="cpu"):
+    def __init__(
+        self, x, y, n_pos, big_reward, random_start=False, seed=None, device="cpu"
+    ):
         super().__init__(device=device, batch_size=[])
 
+        assert n_pos % 2 == 0, "n_pos only tested for even numbers"
+        self.x = x
+        self.y = y
         self.n_pos = n_pos
+        self.big_reward = big_reward
+        self.random_start = random_start
 
-        td_params = self.gen_params(n_pos)
+        self.params = self.gen_params(x, y, n_pos, big_reward)
 
-        self._make_spec(td_params)
+        self._make_spec(self.params)
         if seed is None:
             seed = torch.empty((), dtype=torch.int64).random_().item()
         self.set_seed(seed)
@@ -69,19 +76,20 @@ class ToyEnv(EnvBase):
         self.action_spec = Categorical(4)
         self.reward_spec = Unbounded(
             shape=(*td_params.shape, 1),  # WHY
+            # shape=(1),  # WHY
             dtype=torch.int,
             domain="discrete",
         )
 
     @staticmethod
-    def gen_params(n_pos, batch_size=None) -> TensorDictBase:
+    def gen_params(x, y, n_pos, big_reward, batch_size=None) -> TensorDictBase:
         """Returns a ``tensordict`` containing the physical parameters such as gravitational force and torque or speed limits."""
         if batch_size is None:
             batch_size = []
         td = TensorDict(
             {
                 "params": TensorDict(
-                    {"x": 1, "y": 3, "n_pos": n_pos, "big_reward": 100},
+                    {"x": x, "y": y, "n_pos": n_pos, "big_reward": big_reward},
                     [],
                 )
             },
@@ -95,12 +103,17 @@ class ToyEnv(EnvBase):
 
     def _reset(self, td):
         if td is None or td.is_empty():
-            td = self.gen_params(self.n_pos, batch_size=self.batch_size)
+            td = self.gen_params(
+                self.x, self.y, self.n_pos, self.big_reward, batch_size=self.batch_size
+            )
 
-        pos = torch.zeros(td.shape, device=self.device, dtype=torch.long)
+        if self.random_start:
+            pos = torch.randint(0, td["params", "n_pos"], td.shape, device=self.device)
+        else:
+            pos = torch.zeros(td.shape, device=self.device, dtype=torch.long)
         # Convert into OneHot
         # pos = torch.nn.functional.one_hot(pos, td["params", "n_pos"])
-        print(f"at reset: {pos.shape=}")
+        # print(f"at reset: {pos.shape=}")
 
         out = TensorDict(
             {
@@ -119,7 +132,7 @@ class ToyEnv(EnvBase):
     def _step(td):
         pos = td["pos"]
         # print(f"before argmax: {pos.shape=}")
-        action = td["action"]
+        action = td["action"]  # Action order: left, right, down, up
         # print(f"action: {action.shape=}")
         x, y, n_pos, big_reward = (
             td["params", "x"],
@@ -133,17 +146,13 @@ class ToyEnv(EnvBase):
         # print(f"after argmax: {pos.shape=}")
         # action = torch.argmax(action.to(torch.long), dim=-1)
 
-        # If the pos is 1 and the action is 1, the reward is -x
-        next_pos = (
-            pos.clone()
-        )  # If no next pos is defined, the next pos is the same as the current pos
-        reward = torch.zeros_like(
-            pos, dtype=torch.int
-        )  # If no reward is defined, the reward is 0
+        next_pos = pos.clone()
+        reward = torch.zeros_like(pos, dtype=torch.int)
 
         mask_start = pos == 0
-        mask_end = pos == n_pos
+        mask_end = pos == (n_pos - 1)
         mask_even = pos % 2 == 0
+        mask_before_end = pos == (n_pos - 2)  # Right before the end pos
 
         # Enable left action by default
         next_pos = torch.where(action == 0, pos - 1, next_pos)
@@ -160,21 +169,31 @@ class ToyEnv(EnvBase):
         next_pos = torch.where(mask_even & (action == 3), pos + 2, next_pos)
         reward = torch.where(mask_even & (action == 3), -y.to(torch.int), reward)
 
+        # Ensure that we can never move past the end pos
+        next_pos = torch.where(next_pos >= n_pos, n_pos - 1, next_pos)
+
+        # Ensure that we can never move before the start pos
+        next_pos = torch.where(next_pos < 0, pos, next_pos)
+
         # For starting pos, disable left action
-        next_pos = torch.where(mask_start & (action == 0), pos, next_pos)
-        reward = torch.where(mask_start & (action == 0), 0, reward)
+        # next_pos = torch.where(mask_start & (action == 0), pos, next_pos)
+        # reward = torch.where(mask_start & (action == 0), 0, reward)
         # For starting pos, disable down action
-        next_pos = torch.where(mask_start & (action == 2), pos, next_pos)
-        reward = torch.where(mask_start & (action == 2), 0, reward)
+        # next_pos = torch.where(mask_start & (action == 2), pos, next_pos)
+        # reward = torch.where(mask_start & (action == 2), 0, reward)
 
         # For end pos, disable right action
-        next_pos = torch.where(mask_end & (action == 1), pos, next_pos)
-        reward = torch.where(mask_end & (action == 1), 0, reward)
-        # End pos is done
-        done = torch.where(mask_end, 1.0, 0.0).to(torch.bool)
+        # next_pos = torch.where(mask_end & (action == 1), pos, next_pos)
+        # reward = torch.where(mask_end & (action == 1), 0, reward)
+
+        # If we reach final pos, we're done
+        done = torch.where(next_pos == n_pos - 1, 1.0, 0.0).to(torch.bool)
 
         # Big reward for reaching the end pos
-        reward = torch.where(mask_end, big_reward, reward).to(torch.int)
+        reward = torch.where(next_pos == n_pos - 1, big_reward, reward).to(torch.int)
+
+        # No rewards in terminal state
+        # reward = torch.where(done, 0, reward).to(torch.int)
 
         # print(f"before one_hot: {next_pos.shape=}")
         # Convert next_pos into OneHot
