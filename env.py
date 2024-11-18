@@ -103,9 +103,14 @@ class ToyEnv(EnvBase):
 
     def _reset(self, td):
         if td is None or td.is_empty():
-            td = self.gen_params(
-                self.x, self.y, self.n_pos, self.big_reward, batch_size=self.batch_size
-            )
+            # create empty td
+            td = TensorDict()
+            # td = self.gen_params(
+            #     self.x, self.y, self.n_pos, self.big_reward, batch_size=self.batch_size
+            # )
+        # if td does not have param key, add it
+        if "params" not in td:
+            td["params"] = self.params["params"]
 
         if self.random_start:
             pos = torch.randint(0, td["params", "n_pos"], td.shape, device=self.device)
