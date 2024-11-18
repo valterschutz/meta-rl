@@ -10,10 +10,12 @@ from torchrl.envs.utils import (
 )
 from torchrl.envs.transforms import TransformedEnv, Compose, StepCounter
 from torchrl.modules.tensordict_module.actors import QValueActor
+from torchrl.modules.tensordict_module import ProbabilisticActor, ValueOperator
 from torchrl.modules import EGreedyModule
 from torchrl.data import OneHot, ReplayBuffer, PrioritizedReplayBuffer
 from torchrl.data.replay_buffers import LazyTensorStorage, SamplerWithoutReplacement
-from torchrl.objectives import DQNLoss, SoftUpdate
+from torchrl.objectives import DQNLoss, SoftUpdate, ClipPPOLoss
+from torchrl.objectives.value import GAE
 from torchrl.collectors import SyncDataCollector
 from torchrl.trainers import Trainer
 from torchrl.record.loggers.csv import CSVLogger
@@ -21,7 +23,8 @@ from torchrl.record.loggers.wandb import WandbLogger
 
 
 from tensordict import TensorDict
-from tensordict.nn import TensorDictSequential
+from tensordict.nn import TensorDictSequential, TensorDictModule
+from tensordict.nn.distributions import NormalParamExtractor, OneHotCategorical
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -48,9 +51,9 @@ class OneHotLayer(nn.Module):
 
 device = torch.device("cpu")
 buffer_size = 100
-total_frames = 100
-frames_per_batch = total_frames
-sub_batch_size = 100
+total_frames = 10_000
+frames_per_batch = 1000
+sub_batch_size = 64
 num_optim_epochs = 1000
 gamma = 1
 n_actions = 4
@@ -58,6 +61,9 @@ max_grad_norm = 1
 lr = 1e-1
 eval_every_n_epoch = 1
 max_rollout_steps = 1000
+clip_epsilon = 0.2
+entropy_eps = 1e-4
+lmbda = 0.95
 
 logs = defaultdict(list)
 pbar = tqdm(total=total_frames)
@@ -73,6 +79,7 @@ env = TransformedEnv(env, Compose(StepCounter()))
 
 
 td = env.reset()
+print(f"{td=}")
 
 # do a rollout and see how long it is
 # td = env.rollout(1000)
@@ -110,39 +117,53 @@ wandb.init(
 
 
 actor_net = nn.Sequential(
-    OneHotLayer(num_classes=n_pos), nn.Linear(n_pos, n_actions)
+    OneHotLayer(num_classes=n_pos),
+    nn.Linear(n_pos, n_actions),
 ).to(device)
-
-actor = QValueActor(module=actor_net, in_keys=["pos"], spec=env.action_spec)
-
-exploration_module = EGreedyModule(
+policy_module = TensorDictModule(actor_net, in_keys=["pos"], out_keys=["logits"])
+policy_module = ProbabilisticActor(
+    module=policy_module,
     spec=env.action_spec,
-    eps_init=1.0,
-    eps_end=0.2,
-    annealing_num_steps=total_frames,
+    # in_keys=["loc", "scale"],
+    in_keys=["logits"],
+    distribution_class=OneHotCategorical,
+    return_log_prob=True,
 )
-actor_explore = TensorDictSequential(actor, exploration_module)
 
-loss_module = DQNLoss(actor, action_space=env.action_spec)
-loss_module.make_value_estimator(gamma=gamma)
-target_updater = SoftUpdate(loss_module, eps=0.995)
+value_net = nn.Sequential(OneHotLayer(num_classes=n_pos), nn.Linear(n_pos, n_actions))
+value_module = ValueOperator(value_net, in_keys=["pos"], out_keys=["state_value"])
+advantage_module = GAE(
+    gamma=gamma, lmbda=lmbda, value_network=value_module, average_gae=True
+)
+
+print("Running policy:", policy_module(env.reset()))
+print("Running value:", value_module(env.reset()))
+
+loss_module = ClipPPOLoss(
+    actor_network=policy_module,
+    critic_network=value_module,
+    clip_epsilon=clip_epsilon,
+    entropy_bonus=bool(entropy_eps),
+    entropy_coef=entropy_eps,
+    # these keys match by default but we set this for completeness
+    critic_coef=1.0,
+    loss_critic_type="smooth_l1",
+)
+
 
 optim = torch.optim.Adam(loss_module.parameters(), lr=lr)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optim, total_frames // sub_batch_size, 0.0
+)
 
-# replay_buffer = ReplayBuffer(
-#     storage=LazyTensorStorage(max_size=buffer_size),
-#     sampler=SamplerWithoutReplacement(),
-# )
-replay_buffer = PrioritizedReplayBuffer(
+replay_buffer = ReplayBuffer(
     storage=LazyTensorStorage(max_size=buffer_size),
-    alpha=0.7,
-    beta=0.5,
-    # sampler=SamplerWithoutReplacement(),
+    sampler=SamplerWithoutReplacement(),
 )
 
 collector = SyncDataCollector(
     env,
-    actor_explore,
+    policy_module,
     frames_per_batch=frames_per_batch,
     total_frames=total_frames,
     split_trajs=False,
@@ -166,78 +187,25 @@ for i, td in enumerate(collector):
         grad_norm = nn.utils.clip_grad_norm_(loss_module.parameters(), max_grad_norm)
         optim.step()
         optim.zero_grad()
-        target_updater.step()
         wandb.log({"loss": loss_value.item(), "grad_norm": grad_norm.max().item()})
     pbar.update(td.numel())
-    exploration_module.step(td.numel())
     wandb.log(
         {
             "reward": td["next", "reward"].float().mean().item(),
-            "epsilon": exploration_module.eps.item(),
         }
     )
     if i % eval_every_n_epoch == 0:
-        # with set_exploration_type(ExplorationType.DETERMINISTIC, torch.no_grad()):
-        with torch.no_grad():
+        with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
             # execute a rollout with the (greedy) policy and calculate return
-            eval_rollout = env.rollout(max_rollout_steps, actor)
+            eval_rollout = env.rollout(max_rollout_steps, policy_module)
             wandb.log(
                 {
                     "eval return": eval_rollout["next", "reward"].sum().item(),
                     "eval length": eval_rollout["step_count"].max().item(),
-                    # "eval max step_count": eval_rollout["step_count"].max().item(),
                 }
             )
 
 # After training, do a single rollout and print all states and actions
-td = env.rollout(max_rollout_steps, actor)
+td = env.rollout(max_rollout_steps, policy_module)
 for i in range(len(td)):
     print(f"Step {i}: pos={td['pos'][i].item()}, action={td['action'][i].item()}")
-
-
-# True Q-values are stored as "Q.pt"
-true_q_values = value_iteration(x, y, n_pos, big_reward, gamma)[:-1]
-# Visualize Q-values at the end of training
-with torch.no_grad():
-    thing = actor(td_all_pos["pos"])
-    # print(f"{thing=}")
-    q_values = thing[1].cpu().numpy()[:-1]
-error_q_values = np.abs(true_q_values - q_values)
-
-# Min and max values for the colorbar
-min_val = min(q_values.min(), true_q_values.min(), error_q_values.min())
-max_val = max(q_values.max(), true_q_values.max(), error_q_values.max())
-
-fig, ax = plt.subplots()
-cax = ax.matshow(q_values, cmap="inferno", vmin=min_val, vmax=max_val)
-fig.colorbar(cax)
-# colorbar limits
-cax.set_clim(min_val, max_val)
-fig.canvas.draw()
-q_value_image = PILImage.frombytes(
-    "RGB", fig.canvas.get_width_height(), fig.canvas.tostring_rgb()
-)
-
-fig, ax = plt.subplots()
-cax = ax.matshow(true_q_values, cmap="inferno", vmin=min_val, vmax=max_val)
-fig.colorbar(cax)
-fig.canvas.draw()
-true_q_value_image = PILImage.frombytes(
-    "RGB", fig.canvas.get_width_height(), fig.canvas.tostring_rgb()
-)
-
-fig, ax = plt.subplots()
-cax = ax.matshow(error_q_values, cmap="inferno", vmin=0, vmax=max_val)
-fig.colorbar(cax)
-fig.canvas.draw()
-error_q_value_image = PILImage.frombytes(
-    "RGB", fig.canvas.get_width_height(), fig.canvas.tostring_rgb()
-)
-
-wandb.log(
-    {
-        "Estimated Q-values": wandb.Image(q_value_image),
-        "True Q-values": wandb.Image(true_q_value_image),
-        "Error Q-values": wandb.Image(error_q_value_image),
-    }
-)
