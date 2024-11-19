@@ -32,46 +32,42 @@ from tqdm import tqdm
 
 # torch.set_default_dtype(torch.double)
 
-device = torch.device(0)
+device = torch.device(1)
 
 
-env_name = "pendulum"
-env_task = "swingup"
-env_state_names = ["velocity", "orientation"]
-
-# env_name = "hopper"
-# env_task = "hop"
-# env_state_names = ["position", "velocity", "touch"]
-
-
-# TODO: normalize env
-
-env = DMControlEnv(env_name, env_task, device=device)
+env = GymEnv("InvertedDoublePendulum-v4", device=device)
 env = TransformedEnv(
     env,
     Compose(
-        CatTensors(in_keys=env_state_names, out_key="observation"),
+        ObservationNorm(in_keys=["observation"]),
         DoubleToFloat(),
         StepCounter(),
     ),
 )
+print(f"Normalizing observation space... ", end="")
+env.transform[0].init_stats(num_iter=1000, reduce_dim=0, cat_dim=0)
+print(f"Done.")
 
 logger = CSVLogger("my_exp", video_format="mp4", video_fps=60)
-pixel_env = DMControlEnv(env_name, env_task, from_pixels=True, device=device)
+record_env = GymEnv(
+    "InvertedDoublePendulum-v4", from_pixels=True, pixels_only=False, device=device
+)
 recorder = VideoRecorder(logger, tag="my_video")
 record_env = TransformedEnv(
-    pixel_env,
+    record_env,
     Compose(
-        CatTensors(in_keys=env_state_names, out_key="observation"),
+        ObservationNorm(in_keys=["observation"]),
         DoubleToFloat(),
         recorder,
     ),
 )
+print(f"Normalizing observation space for record env... ", end="")
+record_env.transform[0].init_stats(num_iter=1000, reduce_dim=0, cat_dim=0)
+print(f"Done.")
 
 # is_fork = multiprocessing.get_start_method() == "fork"
 num_cells = 256  # number of cells in each layer i.e. output dim.
-# lr = 3e-4
-lr = 1e-3
+lr = 3e-4
 max_grad_norm = 1.0
 
 batch_size = 1000
@@ -191,8 +187,8 @@ pbar = tqdm(total=total_frames)
 
 wandb.login()
 wandb.init(
-    project=f"meta_{env_name}",
-    name=f"meta_{env_name}|{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
+    project=f"meta_gym",
+    name=f"meta_gym|{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
     config={
         "buffer_size": buffer_size,
         "batch_size": batch_size,
@@ -234,15 +230,19 @@ for i, td in enumerate(collector):
             loss_value.backward()
             # this is not strictly mandatory but it's good practice to keep
             # your gradient norm bounded
-            epoch_gradient_magnitudes[j] = torch.nn.utils.clip_grad_norm_(
-                loss_module.parameters(), max_grad_norm
+            # torch.nn.utils.clip_grad_norm_(loss_module.parameters(), max_grad_norm)
+            epoch_gradient_magnitudes[j] = torch.sqrt(
+                sum(
+                    p.grad.norm() ** 2
+                    for p in loss_module.parameters()
+                    if p.grad is not None
+                )
             )
             optim.step()
             optim.zero_grad()
 
     wandb.log(
         {
-            "reward": td["next", "reward"].mean().item(),
             "step_count": td["step_count"].max().item(),
             "lr": optim.param_groups[0]["lr"],
             "loss": epoch_losses.mean(),
@@ -256,7 +256,6 @@ for i, td in enumerate(collector):
             eval_rollout = env.rollout(1000, policy_module)
             wandb.log(
                 {
-                    "eval reward": eval_rollout["next", "reward"].mean().item(),
                     "eval reward (sum)": eval_rollout["next", "reward"].sum().item(),
                     "eval step_count": eval_rollout["step_count"].max().item(),
                 }
