@@ -61,27 +61,27 @@ class OneHotLayer(nn.Module):
 
 
 device = torch.device("cpu")
-total_frames = 1_000
+total_frames = 50_000
 batch_size = 100
 buffer_size = 1000
 sub_batch_size = 10
 num_optim_epochs = 10
-gamma = 1
+gamma = 0.95
 n_actions = 4
-# max_grad_norm = 1
-lr = 1e-2
+max_grad_norm = 1
+lr = 1e-4
 times_to_eval = 10
 eval_every_n_epoch = (total_frames // batch_size) // times_to_eval
 max_rollout_steps = 100
-alpha_init = 1
+alpha_init = 0.1
+max_alpha = 0.1
 tau = 0.005  # For updating target networks
-# lmbda = 0.9
 
-left_reward = -2.0
-right_reward = 1.0
-down_reward = -3.0
-up_reward = 3.0
-punishment = 0.1
+left_reward = 0.0
+right_reward = 0.0
+down_reward = 0.0
+up_reward = 0.0
+punishment = 0.0
 n_pos = 8
 big_reward = 10
 env = ToyEnv(
@@ -146,6 +146,8 @@ loss_module = DiscreteSACLoss(
     num_actions=n_actions,
     loss_function="l2",
     alpha_init=alpha_init,
+    # min_alpha=0.0,
+    max_alpha=max_alpha,
 )
 target_updater = SoftUpdate(loss_module, tau=tau)
 
@@ -212,7 +214,7 @@ for i, td in enumerate(collector):
             loss_vals["loss_actor"] + loss_vals["loss_qvalue"] + loss_vals["loss_alpha"]
         )
         loss.backward()
-        # nn.utils.clip_grad_norm_(loss_module.parameters(), max_grad_norm)
+        grad_norm = nn.utils.clip_grad_norm_(loss_module.parameters(), max_grad_norm)
         optim.step()
         optim.zero_grad()
         target_updater.step()
@@ -226,10 +228,11 @@ for i, td in enumerate(collector):
             "loss_alpha": loss_vals["loss_alpha"].item(),
             "loss": loss.item(),
             "state distribution": wandb.Histogram(td["pos"].cpu().numpy()),
+            "reward distribution": wandb.Histogram(td["next", "reward"].cpu().numpy()),
             # "state distribution": wandb.Histogram(np.random.randn(10, 10)),
             "alpha": loss_vals["alpha"].item(),
             "entropy": loss_vals["entropy"].item(),
-            # "grad_norm": sum(p**2 for p in loss_module.parameters()).sqrt().item(),
+            "grad_norm": grad_norm.item(),
         }
     )
     # wandb.Histogram(pos=td["pos"].cpu())
