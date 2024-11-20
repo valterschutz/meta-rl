@@ -137,7 +137,8 @@ class ToyEnv(EnvBase):
         next_pos = torch.where(next_pos < 0, pos, next_pos)
 
         # If we did not move, terminate the episode and (maybe) punish
-        done = torch.where(next_pos == pos, 1.0, 0.0).to(torch.bool)
+        # done = torch.where(next_pos == pos, 1.0, 0.0).to(torch.bool)
+        done = torch.zeros_like(pos, dtype=torch.bool)  # TODO
         if self.punishment:
             reward = torch.where(next_pos == pos, -big_reward, reward)
         else:
