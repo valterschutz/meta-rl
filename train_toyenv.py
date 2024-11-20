@@ -61,15 +61,15 @@ class OneHotLayer(nn.Module):
 
 
 device = torch.device("cpu")
-total_frames = 30_000
-batch_size = 1000
-buffer_size = 10_000
-sub_batch_size = 50
+total_frames = 1_000
+batch_size = 100
+buffer_size = 1000
+sub_batch_size = 10
 num_optim_epochs = 10
 gamma = 1
 n_actions = 4
 # max_grad_norm = 1
-lr = 1e-3
+lr = 1e-2
 times_to_eval = 10
 eval_every_n_epoch = (total_frames // batch_size) // times_to_eval
 max_rollout_steps = 100
