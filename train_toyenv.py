@@ -61,31 +61,39 @@ class OneHotLayer(nn.Module):
 
 
 device = torch.device("cpu")
-total_frames = 10_000
-batch_size = 100
-buffer_size = 1000
-sub_batch_size = 20
-num_optim_epochs = 100
+total_frames = 30_000
+batch_size = 1000
+buffer_size = 10_000
+sub_batch_size = 50
+num_optim_epochs = 10
 gamma = 1
 n_actions = 4
 # max_grad_norm = 1
-lr = 1e-5
+lr = 1e-3
 times_to_eval = 10
 eval_every_n_epoch = (total_frames // batch_size) // times_to_eval
-max_rollout_steps = 1000
+max_rollout_steps = 100
 alpha_init = 1
+tau = 0.005  # For updating target networks
 # lmbda = 0.9
 
-# x = 1
-# y = 3
-x = 0
-y = 0
-punishment = False
+left_reward = -2.0
+right_reward = 1.0
+down_reward = -3.0
+up_reward = 3.0
+punishment = 0.1
 n_pos = 8
 big_reward = 10
-env = ToyEnv(x, y, n_pos, big_reward, punishment=punishment, random_start=False).to(
-    device
-)
+env = ToyEnv(
+    left_reward=left_reward,
+    right_reward=right_reward,
+    down_reward=down_reward,
+    up_reward=up_reward,
+    n_pos=n_pos,
+    big_reward=big_reward,
+    punishment=punishment,
+    random_start=False,
+).to(device)
 # Optimal return is 4, if moving right from starting state
 # add stepcount transform
 env = TransformedEnv(env, Compose(StepCounter()))
@@ -139,6 +147,7 @@ loss_module = DiscreteSACLoss(
     loss_function="l2",
     alpha_init=alpha_init,
 )
+target_updater = SoftUpdate(loss_module, tau=tau)
 
 optim = torch.optim.Adam(loss_module.parameters(), lr=lr)
 
@@ -176,8 +185,12 @@ wandb.init(
         "n_actions": n_actions,
         # "max_grad_norm": max_grad_norm,
         "lr": lr,
-        "x": x,
-        "y": y,
+        "left_reward": left_reward,
+        "right_reward": right_reward,
+        "down_reward": down_reward,
+        "up_reward": up_reward,
+        # "x": x,
+        # "y": y,
         "n_pos": n_pos,
         "big_reward": big_reward,
         "punishment": punishment,
@@ -193,6 +206,8 @@ for i, td in enumerate(collector):
         # for _ in range(batch_size // sub_batch_size):
         subdata = replay_buffer.sample(sub_batch_size)
         loss_vals = loss_module(subdata)
+        # print(f"{loss_vals=}")
+        # fail
         loss = (
             loss_vals["loss_actor"] + loss_vals["loss_qvalue"] + loss_vals["loss_alpha"]
         )
@@ -200,6 +215,7 @@ for i, td in enumerate(collector):
         # nn.utils.clip_grad_norm_(loss_module.parameters(), max_grad_norm)
         optim.step()
         optim.zero_grad()
+        target_updater.step()
         # wandb.log({"loss": loss_value.item(), "grad_norm": grad_norm.max().item()})
     pbar.update(td.numel())
     wandb.log(
@@ -209,10 +225,14 @@ for i, td in enumerate(collector):
             "loss_qvalue": loss_vals["loss_qvalue"].item(),
             "loss_alpha": loss_vals["loss_alpha"].item(),
             "loss": loss.item(),
-            "state distribution": wandb.Histogram(td["pos"].cpu()),
+            "state distribution": wandb.Histogram(td["pos"].cpu().numpy()),
+            # "state distribution": wandb.Histogram(np.random.randn(10, 10)),
+            "alpha": loss_vals["alpha"].item(),
+            "entropy": loss_vals["entropy"].item(),
             # "grad_norm": sum(p**2 for p in loss_module.parameters()).sqrt().item(),
         }
     )
+    # wandb.Histogram(pos=td["pos"].cpu())
     if i % eval_every_n_epoch == 0:
         with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
             # execute a rollout with the (greedy) policy and calculate return
@@ -229,5 +249,5 @@ with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
     td = env.rollout(max_rollout_steps, policy_module)
     for i in range(len(td)):
         print(
-            f"Step {i}: pos={td['pos'][i].item()}, action={td['action'][i].item()}, reward={td['next','reward'][i].item()} done={td['done'][i].item()}"
+            f"Step {i}: pos={td['pos'][i].item()}, action={td['action'][i].item()}, reward={td['next','reward'][i].item()} done={td['next','done'][i].item()}"
         )

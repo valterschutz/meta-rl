@@ -5,7 +5,7 @@ import tqdm
 
 from tensordict import TensorDict, TensorDictBase
 
-from torchrl.data import Bounded, Composite, Unbounded, Categorical
+from torchrl.data import Bounded, Composite, Unbounded, Categorical, UnboundedContinuous
 from torchrl.envs import (
     EnvBase,
 )
@@ -39,20 +39,24 @@ class ToyEnv(EnvBase):
 
     def __init__(
         self,
-        x,
-        y,
+        left_reward,
+        right_reward,
+        down_reward,
+        up_reward,
         n_pos,
         big_reward,
         random_start=False,
-        punishment=False,
+        punishment=0,
         seed=None,
         device="cpu",
     ):
         super().__init__(device=device, batch_size=[])
 
         assert n_pos % 2 == 0, "n_pos only tested for even numbers"
-        self.x = x
-        self.y = y
+        self.left_reward = left_reward
+        self.right_reward = right_reward
+        self.down_reward = down_reward
+        self.up_reward = up_reward
         self.n_pos = n_pos
         self.big_reward = big_reward
         self.random_start = random_start
@@ -74,11 +78,12 @@ class ToyEnv(EnvBase):
             pos=Categorical(self.n_pos, shape=(), dtype=torch.int32), shape=()
         )
         self.action_spec = Categorical(4, shape=(), dtype=torch.int32)
-        self.reward_spec = Unbounded(
-            shape=(1,),  # WHY
-            dtype=torch.int32,
-            domain="discrete",
-        )
+        # self.reward_spec = Unbounded(
+        #     shape=(1,),  # WHY
+        #     dtype=torch.float32,
+        #     domain="discrete",
+        # )
+        self.reward_spec = UnboundedContinuous(shape=(1,), dtype=torch.float32)
 
     def _reset(self, td):
         if td is None or td.is_empty():
@@ -108,7 +113,7 @@ class ToyEnv(EnvBase):
     def _step(self, td):
         pos = td["pos"]
         action = td["action"]  # Action order: left, right, down, up
-        x, y, n_pos, big_reward = self.x, self.y, self.n_pos, self.big_reward
+        # x, y, n_pos, big_reward = self.x, self.y, self.n_pos, self.big_reward
 
         next_pos = pos.clone()
         reward = 0 * torch.ones_like(pos, dtype=torch.int)
@@ -117,21 +122,21 @@ class ToyEnv(EnvBase):
 
         # Enable left action by default
         next_pos = torch.where(action == 0, pos - 1, next_pos)
-        reward = torch.where(action == 0, -x, reward)
+        reward = torch.where(action == 0, self.left_reward, reward)
         # Enable right action by default
         next_pos = torch.where(action == 1, pos + 1, next_pos)
-        reward = torch.where(action == 1, -x, reward)
+        reward = torch.where(action == 1, self.right_reward, reward)
 
         # For even pos, enable down and up actions
         # Down action
         next_pos = torch.where(mask_even & (action == 2), pos - 2, next_pos)
-        reward = torch.where(mask_even & (action == 2), -y, reward)
+        reward = torch.where(mask_even & (action == 2), self.down_reward, reward)
         # Up action
         next_pos = torch.where(mask_even & (action == 3), pos + 2, next_pos)
-        reward = torch.where(mask_even & (action == 3), -y, reward)
+        reward = torch.where(mask_even & (action == 3), self.up_reward, reward)
 
         # Ensure that we can never move past the end pos
-        next_pos = torch.where(next_pos >= n_pos, n_pos - 1, next_pos)
+        next_pos = torch.where(next_pos >= self.n_pos, self.n_pos - 1, next_pos)
 
         # Ensure that we can never move before the start pos
         next_pos = torch.where(next_pos < 0, pos, next_pos)
@@ -139,15 +144,12 @@ class ToyEnv(EnvBase):
         # If we did not move, terminate the episode and (maybe) punish
         # done = torch.where(next_pos == pos, 1.0, 0.0).to(torch.bool)
         done = torch.zeros_like(pos, dtype=torch.bool)  # TODO
-        if self.punishment:
-            reward = torch.where(next_pos == pos, -big_reward, reward)
-        else:
-            reward = torch.where(next_pos == pos, 0, reward)
+        reward = torch.where(next_pos == pos, -self.punishment, reward)
 
         # Big reward for reaching the end pos
-        reward = torch.where(next_pos == n_pos - 1, big_reward, reward)
+        reward = torch.where(next_pos == self.n_pos - 1, self.big_reward, reward)
         # If we reach final pos, we're done
-        done = torch.where(next_pos == n_pos - 1, 1.0, done).to(torch.bool)
+        done = torch.where(next_pos == self.n_pos - 1, 1.0, done).to(torch.bool)
 
         out = TensorDict(
             {
