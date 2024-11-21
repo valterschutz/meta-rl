@@ -61,7 +61,7 @@ class OneHotLayer(nn.Module):
 
 
 device = torch.device("cpu")
-total_frames = 1_000
+total_frames = 5_000
 batch_size = 100
 buffer_size = batch_size  # since on-policy
 sub_batch_size = 20
@@ -95,6 +95,9 @@ env = ToyEnv(
     punishment=0.0,
     random_start=False,
 ).to(device)
+
+
+env.set_constraint_state(True)
 
 # add stepcount transform
 env = TransformedEnv(env, Compose(StepCounter()))
