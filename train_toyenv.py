@@ -61,26 +61,25 @@ class OneHotLayer(nn.Module):
 
 
 device = torch.device("cpu")
-total_frames = 50_000
+total_frames = 1_000
 batch_size = 100
-buffer_size = 1000
+buffer_size = batch_size  # since on-policy
 sub_batch_size = 10
-num_optim_epochs = 100
-gamma = 0.95
+num_optim_epochs = 10
+gamma = 0.98
+lmbda = 0.96
 n_actions = 4
 max_grad_norm = 1
-lr = 1e-4
+lr = 1e-3
 times_to_eval = 10
 eval_every_n_epoch = (total_frames // batch_size) // times_to_eval
-max_rollout_steps = 100
-# alpha_init = 0.1
-# max_alpha = 0.1
-tau = 0.005  # For updating target networks
+max_rollout_steps = 10
+clip_epsilon = 0.2
 
-left_reward = 0.0
-right_reward = 0.0
-down_reward = 0.0
-up_reward = 0.0
+left_reward = -1.0
+right_reward = -1.0
+down_reward = -3.0
+up_reward = -3
 punishment = 0.0
 n_pos = 8
 big_reward = 10
@@ -125,33 +124,31 @@ policy_module = ProbabilisticActor(
     return_log_prob=True,
 )
 
-qvalue_net = nn.Sequential(
+value_net = nn.Sequential(
     OneHotLayer(num_classes=n_pos),
     nn.Linear(n_pos, hidden_units),
     nn.Tanh(),
-    nn.Linear(hidden_units, n_actions),
+    nn.Linear(hidden_units, 1),
 ).to(device)
-qvalue_module = ValueOperator(qvalue_net, in_keys=["pos"], out_keys=["action_value"])
+value_module = ValueOperator(value_net, in_keys=["pos"], out_keys=["state_value"])
 
 # advantage_module = GAE(
 #     gamma=gamma, lmbda=lmbda, value_network=qvalue_module, average_gae=True
 # )
 
 
-# loss_module = ReinforceLoss(policy_module, value_module)
-loss_module = DiscreteSACLoss(
-    policy_module,
-    qvalue_module,
-    action_space=env.action_spec,
-    num_actions=n_actions,
-    loss_function="l2",
-    target_entropy=0,
-    target_entropy_weight=0,
-    # alpha_init=alpha_init,
-    # min_alpha=0.0,
-    # max_alpha=max_alpha,
+loss_module = ClipPPOLoss(
+    actor_network=policy_module,
+    critic_network=value_module,
+    clip_epsilon=clip_epsilon,
+    entropy_bonus=False,
 )
-target_updater = SoftUpdate(loss_module, tau=tau)
+advantage_module = GAE(
+    gamma=gamma,
+    lmbda=lmbda,
+    value_network=value_module,
+)
+# target_updater = SoftUpdate(loss_module, tau=tau)
 
 optim = torch.optim.Adam(loss_module.parameters(), lr=lr)
 
@@ -177,8 +174,8 @@ td_all_pos = TensorDict(
 
 wandb.login()
 wandb.init(
-    project="toy_sac",
-    name=f"toy_sac|{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
+    project="toy_ppo",
+    name=f"toy_ppo|{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
     config={
         "buffer_size": buffer_size,
         "frames_per_batch": batch_size,
@@ -204,36 +201,36 @@ wandb.init(
 pbar = tqdm(total=total_frames)
 
 for i, td in enumerate(collector):
-    replay_buffer.extend(td)
     for _ in range(num_optim_epochs):
+        advantage_module(td)
+        replay_buffer.extend(td)
         # advantage_module(td)
-        # for _ in range(batch_size // sub_batch_size):
-        subdata = replay_buffer.sample(sub_batch_size)
-        loss_vals = loss_module(subdata)
-        # print(f"{loss_vals=}")
-        # fail
-        loss = (
-            loss_vals["loss_actor"] + loss_vals["loss_qvalue"] + loss_vals["loss_alpha"]
-        )
-        loss.backward()
-        grad_norm = nn.utils.clip_grad_norm_(loss_module.parameters(), max_grad_norm)
-        optim.step()
-        optim.zero_grad()
-        target_updater.step()
+        for _ in range(batch_size // sub_batch_size):
+            subdata = replay_buffer.sample(sub_batch_size)
+            loss_vals = loss_module(subdata)
+            loss = (
+                loss_vals["loss_objective"]
+                + loss_vals["loss_critic"]
+                # + loss_vals["loss_entropy"]
+            )
+            loss.backward()
+            grad_norm = nn.utils.clip_grad_norm_(
+                loss_module.parameters(), max_grad_norm
+            )
+            optim.step()
+            optim.zero_grad()
+            # target_updater.step()
         # wandb.log({"loss": loss_value.item(), "grad_norm": grad_norm.max().item()})
     pbar.update(td.numel())
     wandb.log(
         {
             "reward": td["next", "reward"].float().mean().item(),
-            "loss_actor": loss_vals["loss_actor"].item(),
-            "loss_qvalue": loss_vals["loss_qvalue"].item(),
-            "loss_alpha": loss_vals["loss_alpha"].item(),
+            "loss_objective": loss_vals["loss_objective"].item(),
+            "loss_critic": loss_vals["loss_critic"].item(),
             "loss": loss.item(),
             "state distribution": wandb.Histogram(td["pos"].cpu().numpy()),
             "reward distribution": wandb.Histogram(td["next", "reward"].cpu().numpy()),
             # "state distribution": wandb.Histogram(np.random.randn(10, 10)),
-            "alpha": loss_vals["alpha"].item(),
-            "entropy": loss_vals["entropy"].item(),
             "grad_norm": grad_norm.item(),
         }
     )
