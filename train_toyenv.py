@@ -64,36 +64,38 @@ device = torch.device("cpu")
 total_frames = 1_000
 batch_size = 100
 buffer_size = batch_size  # since on-policy
-sub_batch_size = 10
+sub_batch_size = 20
 num_optim_epochs = 10
 gamma = 0.98
 lmbda = 0.96
 n_actions = 4
 max_grad_norm = 1
-lr = 1e-3
+lr = 1e-1
 times_to_eval = 10
 eval_every_n_epoch = (total_frames // batch_size) // times_to_eval
-max_rollout_steps = 10
 clip_epsilon = 0.2
+n_pos = 20
+max_rollout_steps = n_pos * 3
+optimal_return = 0.1
+gap = 0.1
+big_reward = 10.0
 
-left_reward = -1.0
-right_reward = -1.0
-down_reward = -3.0
-up_reward = -3
-punishment = 0.0
-n_pos = 8
-big_reward = 10
+# (n_pos-1)*x + big_reward = optimal_return
+x = (optimal_return - big_reward) / (n_pos - 1)
+# (n_pos-1)/2*y + big_reward = optimal_return - gap
+y = (optimal_return - gap - big_reward) / ((n_pos - 1) / 2)
+
 env = ToyEnv(
-    left_reward=left_reward,
-    right_reward=right_reward,
-    down_reward=down_reward,
-    up_reward=up_reward,
+    left_reward=x,
+    right_reward=x,
+    down_reward=y,
+    up_reward=y,
     n_pos=n_pos,
     big_reward=big_reward,
-    punishment=punishment,
+    punishment=0.0,
     random_start=False,
 ).to(device)
-# Optimal return is 4, if moving right from starting state
+
 # add stepcount transform
 env = TransformedEnv(env, Compose(StepCounter()))
 dummy_td = env.rollout(3)
@@ -107,7 +109,7 @@ td_step = env.rand_step(td)
 
 check_env_specs(env)
 
-hidden_units = 32
+hidden_units = 4
 
 actor_net = nn.Sequential(
     OneHotLayer(num_classes=n_pos),
@@ -184,23 +186,25 @@ wandb.init(
         "num_optim_epochs": num_optim_epochs,
         "gamma": gamma,
         "n_actions": n_actions,
-        # "max_grad_norm": max_grad_norm,
+        "max_grad_norm": max_grad_norm,
         "lr": lr,
-        "left_reward": left_reward,
-        "right_reward": right_reward,
-        "down_reward": down_reward,
-        "up_reward": up_reward,
-        # "x": x,
-        # "y": y,
+        "left_reward": env.left_reward,
+        "right_reward": env.right_reward,
+        "down_reward": env.down_reward,
+        "up_reward": env.up_reward,
         "n_pos": n_pos,
-        "big_reward": big_reward,
-        "punishment": punishment,
+        "big_reward": env.big_reward,
+        "punishment": env.punishment,
     },
 )
 
 pbar = tqdm(total=total_frames)
 
 for i, td in enumerate(collector):
+    # After half of the training, change the environment
+    # if i == (total_frames // batch_size) // 2:
+    #     print("Changing environment")
+    #     env.set_constraint_state(True)
     for _ in range(num_optim_epochs):
         advantage_module(td)
         replay_buffer.extend(td)

@@ -49,6 +49,7 @@ class ToyEnv(EnvBase):
         punishment=0,
         seed=None,
         device="cpu",
+        constraints_enabled=False,
     ):
         super().__init__(device=device, batch_size=[])
 
@@ -61,6 +62,7 @@ class ToyEnv(EnvBase):
         self.big_reward = big_reward
         self.random_start = random_start
         self.punishment = punishment
+        self.constraints_enabled = constraints_enabled
 
         # self.params = self.gen_params(x, y, n_pos, big_reward)
 
@@ -122,18 +124,24 @@ class ToyEnv(EnvBase):
 
         # Enable left action by default
         next_pos = torch.where(action == 0, pos - 1, next_pos)
-        reward = torch.where(action == 0, self.left_reward, reward)
         # Enable right action by default
         next_pos = torch.where(action == 1, pos + 1, next_pos)
-        reward = torch.where(action == 1, self.right_reward, reward)
 
         # For even pos, enable down and up actions
         # Down action
         next_pos = torch.where(mask_even & (action == 2), pos - 2, next_pos)
-        reward = torch.where(mask_even & (action == 2), self.down_reward, reward)
         # Up action
         next_pos = torch.where(mask_even & (action == 3), pos + 2, next_pos)
-        reward = torch.where(mask_even & (action == 3), self.up_reward, reward)
+
+        if self.constraints_enabled:
+            # Left action
+            reward = torch.where(action == 0, self.left_reward, reward)
+            # Right action
+            reward = torch.where(action == 1, self.right_reward, reward)
+            # Down action
+            reward = torch.where(mask_even & (action == 2), self.down_reward, reward)
+            # Up action
+            reward = torch.where(mask_even & (action == 3), self.up_reward, reward)
 
         # Ensure that we can never move past the end pos
         next_pos = torch.where(next_pos >= self.n_pos, self.n_pos - 1, next_pos)
@@ -160,3 +168,6 @@ class ToyEnv(EnvBase):
             td.shape,
         )
         return out
+
+    def set_constraint_state(self, constraints_enabled):
+        self.constraints_enabled = constraints_enabled
