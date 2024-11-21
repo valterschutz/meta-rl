@@ -65,7 +65,7 @@ total_frames = 50_000
 batch_size = 100
 buffer_size = 1000
 sub_batch_size = 10
-num_optim_epochs = 10
+num_optim_epochs = 100
 gamma = 0.95
 n_actions = 4
 max_grad_norm = 1
@@ -73,8 +73,8 @@ lr = 1e-4
 times_to_eval = 10
 eval_every_n_epoch = (total_frames // batch_size) // times_to_eval
 max_rollout_steps = 100
-alpha_init = 0.1
-max_alpha = 0.1
+# alpha_init = 0.1
+# max_alpha = 0.1
 tau = 0.005  # For updating target networks
 
 left_reward = 0.0
@@ -145,9 +145,11 @@ loss_module = DiscreteSACLoss(
     action_space=env.action_spec,
     num_actions=n_actions,
     loss_function="l2",
-    alpha_init=alpha_init,
+    target_entropy=0,
+    target_entropy_weight=0,
+    # alpha_init=alpha_init,
     # min_alpha=0.0,
-    max_alpha=max_alpha,
+    # max_alpha=max_alpha,
 )
 target_updater = SoftUpdate(loss_module, tau=tau)
 
