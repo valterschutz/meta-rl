@@ -34,7 +34,7 @@ def make_composite_from_td(td):
     return composite
 
 
-class ToyEnv(EnvBase):
+class BaseEnv(EnvBase):
     batch_locked = False
 
     def __init__(
@@ -171,3 +171,36 @@ class ToyEnv(EnvBase):
 
     def set_constraint_state(self, constraints_enabled):
         self.constraints_enabled = constraints_enabled
+
+
+def get_base_env(**kwargs):
+    env = ToyEnv(**kwargs)
+    env.set_constraint_state(True)
+    env = TransformedEnv(env, Compose(StepCounter()))
+    check_env_specs(env)
+    return env
+
+
+class MetaEnv(EnvBase):
+    def __init__(base_env, base_agent):
+        self.base_env = base_env
+        self.base_agent = base_agent
+
+    def _reset(self, td):
+        # Reset the base agent and return the initial state for the meta agent
+        self.base_env.reset()
+
+    def _step(self, td):
+        pass
+
+    def _make_spec(self):
+        pass
+
+    @staticmethod
+    def _meta_state_from_base_td(base_td):
+        return torch.tensor(
+            [base_td["next", "reward"].mean(), base_td["next", "reward"].std()]
+        )
+
+    def _meta_reward_from_base_td(base_td):
+        return base_td["next", "reward"].sum()

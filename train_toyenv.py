@@ -35,7 +35,7 @@ from tensordict.nn.distributions import (
     OneHotCategorical,
     # Categorical,
 )
-from torch.distributions import Categorical
+from torch.distributions import Categorical, Bernoulli
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -49,17 +49,7 @@ from env import ToyEnv
 from value_iteration import value_iteration
 
 
-class OneHotLayer(nn.Module):
-    def __init__(self, num_classes):
-        super().__init__()
-        self.num_classes = num_classes
-
-    def forward(self, x):
-        # Convert the integer state to one-hot encoded vector
-        x_onehot = F.one_hot(x.to(torch.int64), num_classes=self.num_classes).float()
-        return x_onehot
-
-
+n_meta_episodes = 10
 device = torch.device("cpu")
 total_frames = 5_000
 batch_size = 100
@@ -85,7 +75,8 @@ x = (optimal_return - big_reward) / (n_pos - 1)
 # (n_pos-1)/2*y + big_reward = optimal_return - gap
 y = (optimal_return - gap - big_reward) / ((n_pos - 1) / 2)
 
-env = ToyEnv(
+# Base env
+base_env = get_base_env(
     left_reward=x,
     right_reward=x,
     down_reward=y,
@@ -96,75 +87,18 @@ env = ToyEnv(
     random_start=False,
 ).to(device)
 
+# Base agent
+base_agent = BaseAgent(TODO)
 
-env.set_constraint_state(True)
+# Meta env
+meta_env = get_meta_env()
 
-# add stepcount transform
-env = TransformedEnv(env, Compose(StepCounter()))
-dummy_td = env.rollout(3)
-next_dummy_td = env.step(dummy_td)
-
-# do a rollout and see how long it is
-td = env.rollout(1000)
-# print(f"{td=}")
-td_step = env.rand_step(td)
-# print(f"{td_step=}")
-
-check_env_specs(env)
-
-hidden_units = 4
-
-actor_net = nn.Sequential(
-    OneHotLayer(num_classes=n_pos),
-    nn.Linear(n_pos, hidden_units),
-    nn.Tanh(),
-    nn.Linear(hidden_units, n_actions),
-).to(device)
-policy_module = TensorDictModule(actor_net, in_keys=["pos"], out_keys=["logits"])
-policy_module = ProbabilisticActor(
-    module=policy_module,
-    spec=env.action_spec,
-    in_keys=["logits"],
-    distribution_class=Categorical,
-    return_log_prob=True,
-)
-
-value_net = nn.Sequential(
-    OneHotLayer(num_classes=n_pos),
-    nn.Linear(n_pos, hidden_units),
-    nn.Tanh(),
-    nn.Linear(hidden_units, 1),
-).to(device)
-value_module = ValueOperator(value_net, in_keys=["pos"], out_keys=["state_value"])
-
-# advantage_module = GAE(
-#     gamma=gamma, lmbda=lmbda, value_network=qvalue_module, average_gae=True
-# )
-
-
-loss_module = ClipPPOLoss(
-    actor_network=policy_module,
-    critic_network=value_module,
-    clip_epsilon=clip_epsilon,
-    entropy_bonus=False,
-)
-advantage_module = GAE(
-    gamma=gamma,
-    lmbda=lmbda,
-    value_network=value_module,
-)
-# target_updater = SoftUpdate(loss_module, tau=tau)
-
-optim = torch.optim.Adam(loss_module.parameters(), lr=lr)
-
-replay_buffer = ReplayBuffer(
-    storage=LazyTensorStorage(max_size=buffer_size, device=device),
-    sampler=SamplerWithoutReplacement(),
-)
+# Meta agent networks
+meta_agent = MetaAgent(TODO)
 
 collector = SyncDataCollector(
     env,
-    policy_module,
+    base_policy,
     frames_per_batch=batch_size,
     total_frames=total_frames,
     split_trajs=False,
@@ -203,60 +137,109 @@ wandb.init(
 
 pbar = tqdm(total=total_frames)
 
-for i, td in enumerate(collector):
-    # After half of the training, change the environment
-    # if i == (total_frames // batch_size) // 2:
-    #     print("Changing environment")
-    #     env.set_constraint_state(True)
-    for _ in range(num_optim_epochs):
-        advantage_module(td)
-        replay_buffer.extend(td)
-        # advantage_module(td)
-        for _ in range(batch_size // sub_batch_size):
-            subdata = replay_buffer.sample(sub_batch_size)
-            loss_vals = loss_module(subdata)
-            loss = (
-                loss_vals["loss_objective"]
-                + loss_vals["loss_critic"]
-                # + loss_vals["loss_entropy"]
+for meta_episode in range(n_meta_episodes):
+    for i, base_td in enumerate(
+        collector
+    ):  # each batch for the base agent is one meta-step
+        # Optimization steps for base policy
+        for _ in range(num_optim_epochs):
+            base_advantage_module(base_td)
+            replay_buffer.extend(base_td)
+            # advantage_module(td)
+            for _ in range(batch_size // sub_batch_size):
+                subdata = replay_buffer.sample(sub_batch_size)
+                base_loss_vals = base_loss_module(subdata)
+                base_loss = (
+                    base_loss_vals["loss_objective"]
+                    + base_loss_vals["loss_critic"]
+                    # + loss_vals["loss_entropy"]
+                )
+                base_loss.backward()
+                base_grad_norm = nn.utils.clip_grad_norm_(
+                    base_loss_module.parameters(), max_grad_norm
+                )
+                base_optim.step()
+                base_optim.zero_grad()
+        # Skip the first meta step since we don't have a previous meta step
+        if not (meta_episode == 0 and i == 0):
+            # Assume that we have a `prev_meta_td` with all neccessary information except reward, which we get now
+            meta_td["next", "reward"] = base_td["next", "reward"].sum()
+            if i == len(collector) - 1:  # end of meta episode
+                meta_td["next", "done"] = True
+            else:
+                meta_td["next", "done"] = False
+            # Update meta policy using meta loss
+            print(f"before meta GAE: {meta_td=}")
+            meta_advantage_module(meta_td)
+            meta_loss_vals = meta_loss_module(meta_td)
+            meta_loss = meta_loss_vals["loss_objective"] + meta_loss_vals["loss_critic"]
+            meta_loss.backward()
+            meta_grad_norm = nn.utils.clip_grad_norm_(
+                meta_loss_module.parameters(), max_grad_norm
             )
-            loss.backward()
-            grad_norm = nn.utils.clip_grad_norm_(
-                loss_module.parameters(), max_grad_norm
-            )
-            optim.step()
-            optim.zero_grad()
-            # target_updater.step()
-        # wandb.log({"loss": loss_value.item(), "grad_norm": grad_norm.max().item()})
-    pbar.update(td.numel())
-    wandb.log(
-        {
-            "reward": td["next", "reward"].float().mean().item(),
-            "loss_objective": loss_vals["loss_objective"].item(),
-            "loss_critic": loss_vals["loss_critic"].item(),
-            "loss": loss.item(),
-            "state distribution": wandb.Histogram(td["pos"].cpu().numpy()),
-            "reward distribution": wandb.Histogram(td["next", "reward"].cpu().numpy()),
-            # "state distribution": wandb.Histogram(np.random.randn(10, 10)),
-            "grad_norm": grad_norm.item(),
-        }
-    )
-    # wandb.Histogram(pos=td["pos"].cpu())
-    if i % eval_every_n_epoch == 0:
-        with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
-            # execute a rollout with the (greedy) policy and calculate return
-            eval_rollout = env.rollout(max_rollout_steps, policy_module)
+            meta_optim.step()
+            meta_optim.zero_grad()
+
+        # The current meta state is mean & std. of the reward distribution from the **previous** batch
+        meta_td = TensorDict(
+            {
+                "meta_state": torch.tensor(
+                    [
+                        base_td["next", "reward"].mean(),
+                        base_td["next", "reward"].std(),
+                    ]
+                ),
+            },
+            batch_size=(),
+        )
+        print(f"before policy: {meta_td=}")
+        # Get meta action, a probability to set the constraint
+        meta_td = meta_policy(meta_td)
+        print(f"after policy: {meta_td=}")
+        # Apply meta action
+        meta_action_prob = meta_td["probs"]
+        meta_action = torch.bernoulli(meta_action_prob).bool().item()
+        env.set_constraint_state(meta_action)
+
+        # Update logs
+        pbar.update(td.numel())
+        if not (meta_episode == 0 and i == 0):
             wandb.log(
                 {
-                    "eval return": eval_rollout["next", "reward"].sum().item(),
-                    "eval length": eval_rollout["step_count"].max().item(),
+                    "base reward": base_td["next", "reward"].float().mean().item(),
+                    "base loss_objective": base_loss_vals["loss_objective"].item(),
+                    "base loss_critic": base_loss_vals["loss_critic"].item(),
+                    "base loss": base_loss.item(),
+                    "base state distribution": wandb.Histogram(
+                        base_td["pos"].cpu().numpy()
+                    ),
+                    "base reward distribution": wandb.Histogram(
+                        base_td["next", "reward"].cpu().numpy()
+                    ),
+                    # "state distribution": wandb.Histogram(np.random.randn(10, 10)),
+                    "base grad_norm": base_grad_norm.item(),
+                    "meta action": meta_action,
+                    "meta action prob": meta_action_prob.item(),
+                    "meta reward": meta_td["next", "reward"].item(),
                 }
             )
+        # wandb.Histogram(pos=td["pos"].cpu())
+        # if i % eval_every_n_epoch == 0:
+        #     with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
+        #         # execute a rollout with the (greedy) policy and calculate return
+        #         eval_rollout = env.rollout(max_rollout_steps, base_policy)
+        #         wandb.log(
+        #             {
+        #                 "eval return": eval_rollout["next", "reward"].sum().item(),
+        #                 "eval length": eval_rollout["step_count"].max().item(),
+        #             }
+        #         )
+        # prev_base_td = base_td.clone()
 
 # After training, do a single rollout and print all states and actions
-with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
-    td = env.rollout(max_rollout_steps, policy_module)
-    for i in range(len(td)):
-        print(
-            f"Step {i}: pos={td['pos'][i].item()}, action={td['action'][i].item()}, reward={td['next','reward'][i].item()} done={td['next','done'][i].item()}"
-        )
+# with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
+#     td = env.rollout(max_rollout_steps, base_policy)
+#     for i in range(len(td)):
+#         print(
+#             f"Step {i}: pos={td['pos'][i].item()}, action={td['action'][i].item()}, reward={td['next','reward'][i].item()} done={td['next','done'][i].item()}"
+#         )
