@@ -5,7 +5,7 @@ import tqdm
 
 from tensordict import TensorDict, TensorDictBase
 
-from torchrl.data import Bounded, Composite, Unbounded, Categorical
+from torchrl.data import Bounded, Composite, Unbounded, Categorical, UnboundedContinuous
 from torchrl.envs import (
     EnvBase,
 )
@@ -34,29 +34,35 @@ def make_composite_from_td(td):
     return composite
 
 
-class ToyEnv(EnvBase):
+class BaseEnv(EnvBase):
     batch_locked = False
 
     def __init__(
         self,
-        x,
-        y,
+        left_reward,
+        right_reward,
+        down_reward,
+        up_reward,
         n_pos,
         big_reward,
         random_start=False,
-        punishment=False,
+        punishment=0,
         seed=None,
         device="cpu",
+        constraints_enabled=False,
     ):
         super().__init__(device=device, batch_size=[])
 
         assert n_pos % 2 == 0, "n_pos only tested for even numbers"
-        self.x = x
-        self.y = y
+        self.left_reward = left_reward
+        self.right_reward = right_reward
+        self.down_reward = down_reward
+        self.up_reward = up_reward
         self.n_pos = n_pos
         self.big_reward = big_reward
         self.random_start = random_start
         self.punishment = punishment
+        self.constraints_enabled = constraints_enabled
 
         # self.params = self.gen_params(x, y, n_pos, big_reward)
 
@@ -74,11 +80,12 @@ class ToyEnv(EnvBase):
             pos=Categorical(self.n_pos, shape=(), dtype=torch.int32), shape=()
         )
         self.action_spec = Categorical(4, shape=(), dtype=torch.int32)
-        self.reward_spec = Unbounded(
-            shape=(1,),  # WHY
-            dtype=torch.int32,
-            domain="discrete",
-        )
+        # self.reward_spec = Unbounded(
+        #     shape=(1,),  # WHY
+        #     dtype=torch.float32,
+        #     domain="discrete",
+        # )
+        self.reward_spec = UnboundedContinuous(shape=(1,), dtype=torch.float32)
 
     def _reset(self, td):
         if td is None or td.is_empty():
@@ -108,7 +115,7 @@ class ToyEnv(EnvBase):
     def _step(self, td):
         pos = td["pos"]
         action = td["action"]  # Action order: left, right, down, up
-        x, y, n_pos, big_reward = self.x, self.y, self.n_pos, self.big_reward
+        # x, y, n_pos, big_reward = self.x, self.y, self.n_pos, self.big_reward
 
         next_pos = pos.clone()
         reward = 0 * torch.ones_like(pos, dtype=torch.int)
@@ -117,36 +124,40 @@ class ToyEnv(EnvBase):
 
         # Enable left action by default
         next_pos = torch.where(action == 0, pos - 1, next_pos)
-        reward = torch.where(action == 0, -x, reward)
         # Enable right action by default
         next_pos = torch.where(action == 1, pos + 1, next_pos)
-        reward = torch.where(action == 1, -x, reward)
 
         # For even pos, enable down and up actions
         # Down action
         next_pos = torch.where(mask_even & (action == 2), pos - 2, next_pos)
-        reward = torch.where(mask_even & (action == 2), -y, reward)
         # Up action
         next_pos = torch.where(mask_even & (action == 3), pos + 2, next_pos)
-        reward = torch.where(mask_even & (action == 3), -y, reward)
+
+        if self.constraints_enabled:
+            # Left action
+            reward = torch.where(action == 0, self.left_reward, reward)
+            # Right action
+            reward = torch.where(action == 1, self.right_reward, reward)
+            # Down action
+            reward = torch.where(mask_even & (action == 2), self.down_reward, reward)
+            # Up action
+            reward = torch.where(mask_even & (action == 3), self.up_reward, reward)
 
         # Ensure that we can never move past the end pos
-        next_pos = torch.where(next_pos >= n_pos, n_pos - 1, next_pos)
+        next_pos = torch.where(next_pos >= self.n_pos, self.n_pos - 1, next_pos)
 
         # Ensure that we can never move before the start pos
         next_pos = torch.where(next_pos < 0, pos, next_pos)
 
         # If we did not move, terminate the episode and (maybe) punish
-        done = torch.where(next_pos == pos, 1.0, 0.0).to(torch.bool)
-        if self.punishment:
-            reward = torch.where(next_pos == pos, -big_reward, reward)
-        else:
-            reward = torch.where(next_pos == pos, 0, reward)
+        # done = torch.where(next_pos == pos, 1.0, 0.0).to(torch.bool)
+        done = torch.zeros_like(pos, dtype=torch.bool)  # TODO
+        reward = torch.where(next_pos == pos, -self.punishment, reward)
 
         # Big reward for reaching the end pos
-        reward = torch.where(next_pos == n_pos - 1, big_reward, reward)
+        reward = torch.where(next_pos == self.n_pos - 1, self.big_reward, reward)
         # If we reach final pos, we're done
-        done = torch.where(next_pos == n_pos - 1, 1.0, done).to(torch.bool)
+        done = torch.where(next_pos == self.n_pos - 1, 1.0, done).to(torch.bool)
 
         out = TensorDict(
             {
@@ -157,3 +168,39 @@ class ToyEnv(EnvBase):
             td.shape,
         )
         return out
+
+    def set_constraint_state(self, constraints_enabled):
+        self.constraints_enabled = constraints_enabled
+
+
+def get_base_env(**kwargs):
+    env = ToyEnv(**kwargs)
+    env.set_constraint_state(True)
+    env = TransformedEnv(env, Compose(StepCounter()))
+    check_env_specs(env)
+    return env
+
+
+class MetaEnv(EnvBase):
+    def __init__(base_env, base_agent):
+        self.base_env = base_env
+        self.base_agent = base_agent
+
+    def _reset(self, td):
+        # Reset the base agent and return the initial state for the meta agent
+        self.base_env.reset()
+
+    def _step(self, td):
+        pass
+
+    def _make_spec(self):
+        pass
+
+    @staticmethod
+    def _meta_state_from_base_td(base_td):
+        return torch.tensor(
+            [base_td["next", "reward"].mean(), base_td["next", "reward"].std()]
+        )
+
+    def _meta_reward_from_base_td(base_td):
+        return base_td["next", "reward"].sum()
