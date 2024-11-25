@@ -5,10 +5,64 @@ import tqdm
 
 from tensordict import TensorDict, TensorDictBase
 
-from torchrl.data import Bounded, Composite, Unbounded, Categorical, UnboundedContinuous
+from torchrl.data import (
+    Bounded,
+    Composite,
+    Unbounded,
+    Categorical,
+    UnboundedContinuous,
+    Binary,
+)
 from torchrl.envs import (
     EnvBase,
 )
+
+from collections import defaultdict
+from tqdm import tqdm
+from datetime import datetime
+
+from torchrl.envs.utils import (
+    check_env_specs,
+    step_mdp,
+    set_exploration_type,
+    ExplorationType,
+)
+from torchrl.envs.transforms import TransformedEnv, Compose, StepCounter
+from torchrl.modules.tensordict_module.actors import QValueActor
+from torchrl.modules.tensordict_module import ProbabilisticActor, ValueOperator
+from torchrl.modules import EGreedyModule
+from torchrl.data import OneHot, ReplayBuffer, PrioritizedReplayBuffer
+from torchrl.data.replay_buffers import LazyTensorStorage, SamplerWithoutReplacement
+from torchrl.objectives import (
+    DQNLoss,
+    SoftUpdate,
+    ClipPPOLoss,
+    ReinforceLoss,
+    DiscreteSACLoss,
+)
+from torchrl.objectives.value import GAE
+from torchrl.collectors import SyncDataCollector
+from torchrl.trainers import Trainer
+from torchrl.record.loggers.csv import CSVLogger
+from torchrl.record.loggers.wandb import WandbLogger
+
+
+from tensordict import TensorDict
+from tensordict.nn import TensorDictSequential, TensorDictModule
+from tensordict.nn.distributions import (
+    NormalParamExtractor,
+    OneHotCategorical,
+    # Categorical,
+)
+from torch.distributions import Bernoulli
+import torch
+from torch import nn
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+from PIL import Image as PILImage
+import numpy as np
+
+import wandb
 
 
 def angle_normalize(x):
@@ -64,8 +118,6 @@ class BaseEnv(EnvBase):
         self.punishment = punishment
         self.constraints_enabled = constraints_enabled
 
-        # self.params = self.gen_params(x, y, n_pos, big_reward)
-
         self._make_spec()
         if seed is None:
             seed = torch.empty((), dtype=torch.int64).random_().item()
@@ -80,11 +132,6 @@ class BaseEnv(EnvBase):
             pos=Categorical(self.n_pos, shape=(), dtype=torch.int32), shape=()
         )
         self.action_spec = Categorical(4, shape=(), dtype=torch.int32)
-        # self.reward_spec = Unbounded(
-        #     shape=(1,),  # WHY
-        #     dtype=torch.float32,
-        #     domain="discrete",
-        # )
         self.reward_spec = UnboundedContinuous(shape=(1,), dtype=torch.float32)
 
     def _reset(self, td):
@@ -174,7 +221,7 @@ class BaseEnv(EnvBase):
 
 
 def get_base_env(**kwargs):
-    env = ToyEnv(**kwargs)
+    env = BaseEnv(**kwargs)
     env.set_constraint_state(True)
     env = TransformedEnv(env, Compose(StepCounter()))
     check_env_specs(env)
@@ -182,19 +229,63 @@ def get_base_env(**kwargs):
 
 
 class MetaEnv(EnvBase):
-    def __init__(base_env, base_agent):
+    def __init__(self, base_env, base_agent, total_frames, device):
+        super().__init__(device=device, batch_size=[])
+
         self.base_env = base_env
         self.base_agent = base_agent
 
+        self.base_collector = SyncDataCollector(
+            self.base_env,
+            self.base_agent.policy,
+            frames_per_batch=self.base_agent.buffer_size,
+            total_frames=total_frames,
+            split_trajs=False,
+            device="cpu",
+        )
+        self.base_iter = iter(self.base_collector)
+
     def _reset(self, td):
         # Reset the base agent and return the initial state for the meta agent
-        self.base_env.reset()
+        self.base_agent.reset()
+
+        return TensorDict(
+            {
+                "state": torch.tensor([0.0, 0.0]),
+            }
+        )
 
     def _step(self, td):
-        pass
+        # One meta step equals processing one batch of base agent data
+
+        # Apply meta action, which will affect self.base_iter
+        self.base_env.set_constraint_state(td["action"].item().bool())
+
+        # Get next base batch and update base agent
+        base_td = next(self.base_iter)
+        self.base_agent.process_batch(base_td)
+
+        # Next meta state is the mean and std of the base rewards, next meta reward is the sum of the base rewards
+        meta_td = TensorDict(
+            {
+                "state": self._meta_state_from_base_td(base_td),
+                "reward": self._meta_reward_from_base_td(base_td),
+            },
+            batch_size=(),
+        )
+
+        return meta_td
 
     def _make_spec(self):
-        pass
+        self.observation_spec = Composite(
+            state=UnboundedContinuous(shape=(2,), dtype=torch.float32),
+            shape=(),
+        )
+        self.state_spec = Composite(
+            state=UnboundedContinuous(shape=(2,), dtype=torch.float32),
+        )
+        self.action_spec = Binary(shape=(), dtype=torch.bool)
+        self.reward_spec = UnboundedContinuous(shape=(1,), dtype=torch.float32)
 
     @staticmethod
     def _meta_state_from_base_td(base_td):
@@ -202,5 +293,6 @@ class MetaEnv(EnvBase):
             [base_td["next", "reward"].mean(), base_td["next", "reward"].std()]
         )
 
+    @staticmethod
     def _meta_reward_from_base_td(base_td):
         return base_td["next", "reward"].sum()
