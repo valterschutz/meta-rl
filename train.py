@@ -17,13 +17,15 @@ from agents import BaseAgent, MetaAgent
 from utils import log
 
 
-n_meta_episodes = 10
+# n_meta_episodes = 10
+total_frames = 100
 device = torch.device("cpu")
 n_actions = 4
-lr = 1e-1
-times_to_eval = 10
+# lr = 1e-1
+# times_to_eval = 10
 # eval_every_n_epoch = (total_frames // batch_size) // times_to_eval
 # max_rollout_steps = n_pos * 3
+
 optimal_return = 0.1
 gap = 0.1
 big_reward = 10.0
@@ -48,6 +50,7 @@ base_env = get_base_env(
     device="cpu",
     constraints_enabled=False,
 ).to(device)
+check_env_specs(base_env)
 
 # Base agent
 base_agent = BaseAgent(
@@ -65,6 +68,7 @@ base_agent = BaseAgent(
 meta_env = MetaEnv(
     base_env=base_env, base_agent=base_agent, total_frames=1000, device="cpu"
 )
+check_env_specs(meta_env)
 
 # Meta agent
 meta_agent = MetaAgent(
@@ -75,14 +79,28 @@ meta_agent = MetaAgent(
     lr=1e-1,
 )
 
-meta_collector = SyncDataCollector(
-    meta_env,
-    meta_agent.policy,
-    frames_per_batch=1,
-    total_frames=100,
-    split_trajs=False,
-    device="cpu",
-)
+td = meta_env.reset()
+print(f"td after reset: {td=}")
+td = meta_agent.policy(td)
+print(f"td after policy: {td=}")
+td = meta_env.step(td)
+print(f"td after step: {td=}")
+print(f"reward: {td['next', 'reward'].item()}")
+
+# meta_collector = SyncDataCollector(
+#     meta_env,
+#     meta_agent.policy,
+#     frames_per_batch=1,
+#     total_frames=100,
+#     split_trajs=False,
+#     device="cpu",
+# )
+
+# Test the meta collector
+# it = iter(meta_collector)
+# td = next(it)
+# print(f"{td=}")
+# fail
 
 # all_pos = torch.arange(n_pos)
 # td_all_pos = TensorDict(
@@ -97,7 +115,7 @@ wandb.init(
     config={
         "base_agent.buffer_size": base_agent.buffer_size,
         "base_agent.sub_batch_size": base_agent.sub_batch_size,
-        "meta_collector.total_frames": meta_collector.total_frames,
+        # "meta_collector.total_frames": total_frames,
         # "base num_optim_epochs": base_agent.num_optim_epochs,
         # "gamma": gamma,
         # "n_actions": n_actions,
@@ -115,12 +133,18 @@ wandb.init(
     },
 )
 
-pbar = tqdm(total=meta_collector.total_frames)
+# pbar = tqdm(total=meta_collector.total_frames)
+pbar = tqdm(total=total_frames)
 
-for i, meta_td in enumerate(meta_collector):
-    meta_agent.process_batch(meta_td)
+meta_td = meta_env.reset()
+# for i, meta_td in enumerate(meta_collector):
+for i in range(total_frames):
+    meta_td = meta_agent.policy(meta_td)
+    meta_td = meta_env.step(meta_td)
+    meta_agent.process_batch(meta_td.unsqueeze(0))
     # Update logs
     log(pbar, meta_td)
+    step_mdp(meta_td)
 
 
 # After training, do a single rollout and print all states and actions

@@ -229,9 +229,8 @@ def get_base_env(**kwargs):
 
 
 class MetaEnv(EnvBase):
-    def __init__(self, base_env, base_agent, total_frames, device):
+    def __init__(self, base_env, base_agent, total_frames, device, seed=None):
         super().__init__(device=device, batch_size=[])
-
         self.base_env = base_env
         self.base_agent = base_agent
 
@@ -245,6 +244,11 @@ class MetaEnv(EnvBase):
         )
         self.base_iter = iter(self.base_collector)
 
+        self._make_spec()
+        if seed is None:
+            seed = torch.empty((), dtype=torch.int64).random_().item()
+        self.set_seed(seed)
+
     def _reset(self, td):
         # Reset the base agent and return the initial state for the meta agent
         self.base_agent.reset()
@@ -255,11 +259,15 @@ class MetaEnv(EnvBase):
             }
         )
 
+    def _set_seed(self, seed: Optional[int]):
+        rng = torch.manual_seed(seed)
+        self.rng = rng
+
     def _step(self, td):
         # One meta step equals processing one batch of base agent data
 
         # Apply meta action, which will affect self.base_iter
-        self.base_env.set_constraint_state(td["action"].item().bool())
+        self.base_env.set_constraint_state(td["action"].item())
 
         # Get next base batch and update base agent
         base_td = next(self.base_iter)
@@ -284,15 +292,20 @@ class MetaEnv(EnvBase):
         self.state_spec = Composite(
             state=UnboundedContinuous(shape=(2,), dtype=torch.float32),
         )
-        self.action_spec = Binary(shape=(), dtype=torch.bool)
+        self.action_spec = Binary(shape=(1,), dtype=torch.bool)
         self.reward_spec = UnboundedContinuous(shape=(1,), dtype=torch.float32)
 
     @staticmethod
     def _meta_state_from_base_td(base_td):
+        # Note the use of .detach() to avoid backpropagating through the base agent
         return torch.tensor(
-            [base_td["next", "reward"].mean(), base_td["next", "reward"].std()]
+            [
+                base_td["next", "reward"].mean().detach(),
+                base_td["next", "reward"].std().detach(),
+            ]
         )
 
     @staticmethod
     def _meta_reward_from_base_td(base_td):
-        return base_td["next", "reward"].sum()
+        # Note the use of .detach() to avoid backpropagating through the base agent
+        return base_td["next", "reward"].sum().detach()
