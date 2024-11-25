@@ -1,3 +1,6 @@
+# TODO:
+# - [ ] Make sure that base agent loss converges in each meta episode before applying meta actions
+
 from tqdm import tqdm
 from datetime import datetime
 
@@ -16,20 +19,15 @@ from env import get_base_env, MetaEnv
 from agents import BaseAgent, MetaAgent
 from utils import log
 
-
-# n_meta_episodes = 10
-total_frames = 100
+meta_episodes = 2
+meta_steps_per_episode = 100  # TODO: 10 should be enough
 device = torch.device("cpu")
 n_actions = 4
-# lr = 1e-1
-# times_to_eval = 10
-# eval_every_n_epoch = (total_frames // batch_size) // times_to_eval
-# max_rollout_steps = n_pos * 3
 
 optimal_return = 0.1
 gap = 0.1
 big_reward = 10.0
-n_pos = 20
+n_pos = 10  # TODO: should be 20?
 
 # (n_pos-1)*x + big_reward = optimal_return
 x = (optimal_return - big_reward) / (n_pos - 1)
@@ -61,7 +59,7 @@ base_agent = BaseAgent(
     sub_batch_size=20,
     device="cpu",
     max_grad_norm=1,
-    lr=1e-1,
+    lr=1e-2,  # TODO: should be 1e-1?
 )
 
 # Meta env
@@ -85,7 +83,9 @@ meta_agent = MetaAgent(
 # print(f"td after policy: {td=}")
 # td = meta_env.step(td)
 # print(f"td after step: {td=}")
-# print(f"reward: {td['next', 'reward'].item()}")
+# print(f"next reward: {td['next', 'reward'].item()}")
+# print(f"next state: {td['next', 'state'][0].item()}, {td['next', 'state'][1].item()}")
+# fail
 # meta_agent.process_batch(td.unsqueeze(0))
 
 # meta_collector = SyncDataCollector(
@@ -134,24 +134,17 @@ wandb.init(
     },
 )
 
-# pbar = tqdm(total=meta_collector.total_frames)
-pbar = tqdm(total=total_frames)
+pbar = tqdm(total=meta_steps_per_episode * meta_episodes)
 
-meta_td = meta_env.reset()
-# for i, meta_td in enumerate(meta_collector):
-for i in range(total_frames):
-    meta_td = meta_agent.policy(meta_td)
-    meta_td = meta_env.step(meta_td)
-    meta_agent.process_batch(meta_td.unsqueeze(0))
-    # Update logs
-    log(pbar, meta_td)
-    step_mdp(meta_td)
-
-
-# After training, do a single rollout and print all states and actions
-# with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
-#     td = env.rollout(max_rollout_steps, base_policy)
-#     for i in range(len(td)):
-#         print(
-#             f"Step {i}: pos={td['pos'][i].item()}, action={td['action'][i].item()}, reward={td['next','reward'][i].item()} done={td['next','done'][i].item()}"
-#         )
+for i in range(meta_episodes):
+    meta_td = meta_env.reset()  # Resets base agent in meta environment
+    for j in range(meta_steps_per_episode):
+        meta_td = meta_agent.policy(meta_td)
+        meta_td = meta_env.step(meta_td)
+        meta_agent.process_batch(meta_td.unsqueeze(0))
+        # Update logs, including a base agent evaluation
+        with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
+            assert not base_env.constraints_enabled  # TODO: remove
+            base_eval_td = base_env.rollout(100, base_agent.policy)
+        log(pbar, meta_td.detach().cpu(), base_eval_td.cpu(), episode=i, step=j)
+        meta_td = step_mdp(meta_td)

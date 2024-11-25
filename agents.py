@@ -9,6 +9,7 @@ from torchrl.objectives.value import GAE
 
 from utils import OneHotLayer
 
+from tensordict import TensorDict
 from tensordict.nn import TensorDictModule
 
 
@@ -53,7 +54,7 @@ class BaseAgent:
             actor_network=self.policy,
             critic_network=self.value_module,
             clip_epsilon=0.2,
-            entropy_bonus=False,
+            entropy_bonus=True,
         )
         self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
         self.replay_buffer.empty()
@@ -98,17 +99,51 @@ class BaseAgent:
         )
 
     def process_batch(self, base_td):
-        # Process a single batch of data
-        for _ in range(self.num_optim_epochs):
+        # Process a single batch of data and return losses and maximum grad norm
+        times_to_sample = len(base_td) // self.sub_batch_size
+        max_grad_norm = 0
+        losses_objective = []
+        losses_critic = []
+        losses_entropy = []
+        for i in range(self.num_optim_epochs):
             self.advantage_module(base_td)
             self.replay_buffer.extend(base_td)
-            for _ in range(len(base_td) // self.sub_batch_size):
+            for j in range(times_to_sample):
                 sub_base_td = self.replay_buffer.sample(self.sub_batch_size)
+
+                self.optim.zero_grad()
                 loss_td = self.loss_module(sub_base_td)
                 loss = loss_td["loss_objective"] + loss_td["loss_critic"]
-                self.optim.zero_grad()
+                losses_objective.append(loss_td["loss_objective"].mean().item())
+                losses_critic.append(loss_td["loss_critic"].mean().item())
+                losses_entropy.append(loss_td["loss_entropy"].mean().item())
                 loss.backward()
+                grad_norm = nn.utils.clip_grad_norm_(
+                    self.loss_module.parameters(), self.max_grad_norm
+                )
+                max_grad_norm = max(grad_norm.item(), max_grad_norm)
                 self.optim.step()
+        losses = TensorDict(
+            {
+                "loss_objective": torch.tensor(
+                    sum(losses_objective) / len(losses_objective),
+                    device=self.device,
+                    dtype=torch.float32,
+                ),
+                "loss_critic": torch.tensor(
+                    sum(losses_critic) / len(losses_critic),
+                    device=self.device,
+                    dtype=torch.float32,
+                ),
+                "loss_entropy": torch.tensor(
+                    sum(losses_entropy) / len(losses_entropy),
+                    device=self.device,
+                    dtype=torch.float32,
+                ),
+            },
+            batch_size=(),
+        )
+        return losses, max_grad_norm
 
 
 class MetaAgent:
@@ -172,6 +207,8 @@ class MetaAgent:
         self.advantage_module(td)
         # Detach sample_log_prob??? TODO
         td["sample_log_prob"] = td["sample_log_prob"].detach()
+
+        self.optim.zero_grad()
         loss_td = self.loss_module(td)
         loss = loss_td["loss_objective"] + loss_td["loss_critic"]
         loss.backward()
@@ -179,7 +216,6 @@ class MetaAgent:
             self.loss_module.parameters(), self.max_grad_norm
         )
         self.optim.step()
-        self.optim.zero_grad()
 
     # def act(self, td):
     #     # Update actions which will affect next base agent batch

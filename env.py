@@ -222,7 +222,7 @@ class BaseEnv(EnvBase):
 
 def get_base_env(**kwargs):
     env = BaseEnv(**kwargs)
-    env.set_constraint_state(True)
+    env.set_constraint_state(kwargs["constraints_enabled"])
     env = TransformedEnv(env, Compose(StepCounter()))
     check_env_specs(env)
     return env
@@ -256,6 +256,21 @@ class MetaEnv(EnvBase):
         return TensorDict(
             {
                 "state": torch.tensor([0.0, 0.0]),
+                "base_agent_losses": TensorDict(
+                    {
+                        "loss_objective": torch.tensor(
+                            0.0, device=self.device, dtype=torch.float32
+                        ),
+                        "loss_critic": torch.tensor(
+                            0.0, device=self.device, dtype=torch.float32
+                        ),
+                        "loss_entropy": torch.tensor(
+                            0.0, device=self.device, dtype=torch.float32
+                        ),
+                    },
+                    batch_size=(),
+                ),
+                "base_agent_grad_norm": torch.tensor(0.0),
             }
         )
 
@@ -267,17 +282,19 @@ class MetaEnv(EnvBase):
         # One meta step equals processing one batch of base agent data
 
         # Apply meta action, which will affect self.base_iter
-        self.base_env.set_constraint_state(td["action"].item())
+        # self.base_env.set_constraint_state(td["action"].item()) # TODO: uncomment once base agent loss converges
 
         # Get next base batch and update base agent
         base_td = next(self.base_iter)
-        self.base_agent.process_batch(base_td)
+        base_agent_losses, base_agent_grad_norm = self.base_agent.process_batch(base_td)
 
         # Next meta state is the mean and std of the base rewards, next meta reward is the sum of the base rewards
         meta_td = TensorDict(
             {
                 "state": self._meta_state_from_base_td(base_td),
                 "reward": self._meta_reward_from_base_td(base_td),
+                "base_agent_losses": base_agent_losses,
+                "base_agent_grad_norm": base_agent_grad_norm,
             },
             batch_size=(),
         )
@@ -287,6 +304,12 @@ class MetaEnv(EnvBase):
     def _make_spec(self):
         self.observation_spec = Composite(
             state=UnboundedContinuous(shape=(2,), dtype=torch.float32),
+            base_agent_losses=Composite(
+                loss_objective=UnboundedContinuous(shape=(), dtype=torch.float32),
+                loss_critic=UnboundedContinuous(shape=(), dtype=torch.float32),
+                loss_entropy=UnboundedContinuous(shape=(), dtype=torch.float32),
+            ),
+            base_agent_grad_norm=UnboundedContinuous(shape=(), dtype=torch.float32),
             shape=(),
         )
         self.state_spec = Composite(
