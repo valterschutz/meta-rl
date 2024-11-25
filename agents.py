@@ -169,7 +169,9 @@ class MetaAgent:
 
     def process_batch(self, td):
         # Since td will only contain a single sample, we don't bother with several updates
-        self.advantage_module(td.unsqueeze(0))
+        self.advantage_module(td)
+        # Detach sample_log_prob??? TODO
+        td["sample_log_prob"] = td["sample_log_prob"].detach()
         loss_td = self.loss_module(td)
         loss = loss_td["loss_objective"] + loss_td["loss_critic"]
         loss.backward()

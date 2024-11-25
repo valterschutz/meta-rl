@@ -79,13 +79,14 @@ meta_agent = MetaAgent(
     lr=1e-1,
 )
 
-td = meta_env.reset()
-print(f"td after reset: {td=}")
-td = meta_agent.policy(td)
-print(f"td after policy: {td=}")
-td = meta_env.step(td)
-print(f"td after step: {td=}")
-print(f"reward: {td['next', 'reward'].item()}")
+# td = meta_env.reset()
+# print(f"td after reset: {td=}")
+# td = meta_agent.policy(td)
+# print(f"td after policy: {td=}")
+# td = meta_env.step(td)
+# print(f"td after step: {td=}")
+# print(f"reward: {td['next', 'reward'].item()}")
+# meta_agent.process_batch(td.unsqueeze(0))
 
 # meta_collector = SyncDataCollector(
 #     meta_env,

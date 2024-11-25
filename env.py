@@ -238,7 +238,7 @@ class MetaEnv(EnvBase):
             self.base_env,
             self.base_agent.policy,
             frames_per_batch=self.base_agent.buffer_size,
-            total_frames=total_frames,
+            total_frames=-1,
             split_trajs=False,
             device="cpu",
         )
