@@ -1,4 +1,4 @@
-name: meta-rl-3.12
+name: meta-rl
 channels:
   - conda-forge
 dependencies:
