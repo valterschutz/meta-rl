@@ -4,7 +4,7 @@ import torch.nn as nn
 from torchrl.modules.tensordict_module import ProbabilisticActor, ValueOperator
 from torchrl.data.replay_buffers import LazyTensorStorage, SamplerWithoutReplacement
 from torchrl.data import Categorical, Binary, UnboundedContinuous, ReplayBuffer
-from torchrl.objectives import ClipPPOLoss
+from torchrl.objectives import ClipPPOLoss, A2CLoss
 from torchrl.objectives.value import GAE
 
 from utils import OneHotLayer
@@ -54,8 +54,13 @@ class BaseAgent:
             actor_network=self.policy,
             critic_network=self.value_module,
             clip_epsilon=0.2,
-            entropy_bonus=True,
+            entropy_bonus=False,
         )
+        # self.loss_module = A2CLoss(
+        #     actor_network=self.policy,
+        #     critic_network=self.value_module,
+        #     entropy_bonus=False,
+        # )
         self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
         self.replay_buffer.empty()
 
@@ -65,9 +70,10 @@ class BaseAgent:
 
         self.actor_net = nn.Sequential(
             OneHotLayer(num_classes=n_states),
-            nn.Linear(n_states, self.hidden_units),
-            nn.Tanh(),
-            nn.Linear(self.hidden_units, n_actions),
+            nn.Linear(n_states, n_actions),
+            # nn.Linear(n_states, self.hidden_units),
+            # nn.Tanh(),
+            # nn.Linear(self.hidden_units, n_actions),
         ).to(self.device)
         self.policy = TensorDictModule(
             self.actor_net, in_keys=["pos"], out_keys=["logits"]
@@ -85,15 +91,16 @@ class BaseAgent:
 
         self.value_net = nn.Sequential(
             OneHotLayer(num_classes=n_states),
-            nn.Linear(n_states, self.hidden_units),
-            nn.Tanh(),
-            nn.Linear(self.hidden_units, 1),
+            nn.Linear(n_states, 1),
+            # nn.Linear(n_states, self.hidden_units),
+            # nn.Tanh(),
+            # nn.Linear(self.hidden_units, 1),
         ).to(self.device)
         self.value_module = ValueOperator(
             self.value_net, in_keys=["pos"], out_keys=["state_value"]
         )
         self.advantage_module = GAE(
-            gamma=0.98,
+            gamma=1,
             lmbda=0.96,
             value_network=self.value_module,
         )
@@ -104,7 +111,7 @@ class BaseAgent:
         max_grad_norm = 0
         losses_objective = []
         losses_critic = []
-        losses_entropy = []
+        # losses_entropy = []
         for i in range(self.num_optim_epochs):
             self.advantage_module(base_td)
             self.replay_buffer.extend(base_td)
@@ -116,7 +123,7 @@ class BaseAgent:
                 loss = loss_td["loss_objective"] + loss_td["loss_critic"]
                 losses_objective.append(loss_td["loss_objective"].mean().item())
                 losses_critic.append(loss_td["loss_critic"].mean().item())
-                losses_entropy.append(loss_td["loss_entropy"].mean().item())
+                # losses_entropy.append(loss_td["loss_entropy"].mean().item())
                 loss.backward()
                 grad_norm = nn.utils.clip_grad_norm_(
                     self.loss_module.parameters(), self.max_grad_norm
@@ -135,11 +142,11 @@ class BaseAgent:
                     device=self.device,
                     dtype=torch.float32,
                 ),
-                "loss_entropy": torch.tensor(
-                    sum(losses_entropy) / len(losses_entropy),
-                    device=self.device,
-                    dtype=torch.float32,
-                ),
+                # "loss_entropy": torch.tensor(
+                #     sum(losses_entropy) / len(losses_entropy),
+                #     device=self.device,
+                #     dtype=torch.float32,
+                # ),
             },
             batch_size=(),
         )

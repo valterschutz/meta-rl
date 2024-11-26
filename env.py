@@ -107,7 +107,7 @@ class BaseEnv(EnvBase):
     ):
         super().__init__(device=device, batch_size=[])
 
-        assert n_pos % 2 == 1, "n_pos only tested for odd numbers"
+        assert n_pos % 2 == 0, "n_pos only tested for even numbers"
         self.left_reward = left_reward
         self.right_reward = right_reward
         self.down_reward = down_reward
@@ -201,12 +201,12 @@ class BaseEnv(EnvBase):
         done = torch.zeros_like(pos, dtype=torch.bool)  # TODO
         reward = torch.where(next_pos == pos, -self.punishment, reward)
 
-        # Big reward for reaching the end pos, added to possible constraints
-        reward = torch.where(
-            next_pos == self.n_pos - 1, reward + self.big_reward, reward
-        )
+        # Big reward for reaching the end pos, overriding to possible constraints
+        reward = torch.where(next_pos == self.n_pos - 1, self.big_reward, reward)
         # If we reach final pos, we're done
         done = torch.where(next_pos == self.n_pos - 1, 1.0, done).to(torch.bool)
+        # We're also done if the step count is too high, e.g ten times the number of positions
+        # done = torch.where(pos > 10 * self.n_pos, 1.0, done).to(torch.bool)
 
         out = TensorDict(
             {
