@@ -60,3 +60,14 @@ def log(pbar, meta_td, base_eval_td, episode, step):
             .item(),
         }
     )
+
+
+def print_base_rollout(td):
+    # Prints visited states, actions taken, and rewards received in a base rollout
+    print("<step>: (<state>, <action>, <next_reward>)")
+    for i in range(td["step_count"].max().item() + 1):
+        print(
+            f"{i}: ({td['pos'][i].item()}, {td['action'][i].item()}, {td['next', 'reward'][i].item()})"
+        )
+    print(f"Return: {td['next', 'reward'].sum().item()}")
+    print()
