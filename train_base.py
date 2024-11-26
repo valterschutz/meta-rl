@@ -27,7 +27,7 @@ gap = 0.1  # How much worse the fast path is
 big_reward = 10.0
 n_states = 10
 init_constraints = False  # Whether to start with constraints enabled
-halfway_constraints = False  # Whether to enable constraints halfway through training
+halfway_constraints = True  # Whether to enable constraints halfway through training
 
 # Assuming n_pos is even, the below equations should hold
 # (n_pos-2)*x + big_reward = optimal_return
@@ -73,7 +73,7 @@ collector = SyncDataCollector(
     env,
     agent.exploration_policy,
     frames_per_batch=env.n_states,
-    total_frames=100 * env.n_states,
+    total_frames=200 * env.n_states,
     split_trajs=False,
     device="cpu",
 )
@@ -98,6 +98,7 @@ wandb.init(
         "halfway_constraints": halfway_constraints,
         "w_lr": agent.w_lr,
         "theta_lr": agent.theta_lr,
+        "num_optim_epochs": agent.num_optim_epochs,
     },
 )
 

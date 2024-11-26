@@ -24,13 +24,15 @@ class DiscreteACAgent:
         self.theta_lr = theta_lr
         self.num_optim_epochs = num_optim_epochs
 
+        self.optimism = 0
+
         self.reset()
 
     def reset(self):
-        self.w = torch.randn(
+        self.w = self.optimism * torch.ones(
             self.n_states, device=self.device
         )  # weights for value function
-        self.theta = torch.randn(
+        self.theta = torch.zeros(
             self.n_states * self.n_actions, device=self.device
         )  # weights for policy
 
@@ -55,13 +57,14 @@ class DiscreteACAgent:
     def process_batch(self, td):
         td_errors = []
         for j in range(self.num_optim_epochs):
+            self.old_w = self.w.clone()
             for i in range(len(td)):
                 state = td["state"][i]
                 action = td["action"][i]
                 reward = td["next", "reward"][i]
                 next_state = td["next", "state"][i]
                 # print(f"{state=}, {action=}, {reward=}, {next_state=}")
-                td_error = reward + self.w[next_state] - self.w[state]
+                td_error = reward + self.old_w[next_state] - self.w[state]
                 self.w += self.w_lr * td_error * self.get_state_feature(state)
                 action_probs = self.get_action_probabilities(state)
                 grad_log_pi = (
