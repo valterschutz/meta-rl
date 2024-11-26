@@ -15,8 +15,8 @@ from torchrl.collectors import SyncDataCollector
 import torch
 import wandb
 
-from env import get_base_env, MetaEnv
-from agents import BaseAgent, MetaAgent
+from env import get_base_env
+from agents import DiscreteACAgent
 from utils import log, print_base_rollout
 
 device = torch.device("cpu")
@@ -25,24 +25,24 @@ n_actions = 4
 optimal_return = 0.2  # Optimal return using slow path
 gap = 0.1  # How much worse the fast path is
 big_reward = 10.0
-n_pos = 20
+n_states = 10
 init_constraints = False  # Whether to start with constraints enabled
-halfway_constraints = True  # Whether to enable constraints halfway through training
+halfway_constraints = False  # Whether to enable constraints halfway through training
 
 # Assuming n_pos is even, the below equations should hold
 # (n_pos-2)*x + big_reward = optimal_return
-x = (optimal_return - big_reward) / (n_pos - 2)
+x = (optimal_return - big_reward) / (n_states - 2)
 # (n_pos-2)/2*y + big_reward = optimal_return - gap
-y = (optimal_return - gap - big_reward) * 2 / (n_pos - 2)
+y = (optimal_return - gap - big_reward) * 2 / (n_states - 2)
 print(f"x: {x}, y: {y}")
 
 # Base env
-base_env = get_base_env(
+env = get_base_env(
     left_reward=x,
     right_reward=x,
     down_reward=y,
     up_reward=y,
-    n_pos=n_pos,
+    n_states=n_states,
     big_reward=big_reward,
     random_start=False,
     punishment=0.0,
@@ -50,8 +50,8 @@ base_env = get_base_env(
     device="cpu",
     constraints_enabled=False,
 ).to(device)
-check_env_specs(base_env)
-base_env.set_constraint_state(init_constraints)
+check_env_specs(env)
+env.set_constraint_state(init_constraints)
 
 
 # Baseline agent, always goes right (which is optimal)
@@ -60,23 +60,20 @@ def baseline_policy(td):
     return td
 
 
-# Base agent
-base_agent = BaseAgent(
-    state_spec=base_env.state_spec,
-    action_spec=base_env.action_spec,
-    num_optim_epochs=10,
-    buffer_size=base_env.n_pos,
-    sub_batch_size=min(20, base_env.n_pos),
+agent = DiscreteACAgent(
+    n_states=env.n_states,
+    n_actions=n_actions,
     device="cpu",
-    max_grad_norm=1,
-    lr=1e-1,
+    w_lr=1e-2,
+    theta_lr=1e-3,
+    num_optim_epochs=100,
 )
 
-base_collector = SyncDataCollector(
-    base_env,
-    base_agent.policy,
-    frames_per_batch=base_agent.buffer_size,
-    total_frames=100 * base_env.n_pos,
+collector = SyncDataCollector(
+    env,
+    agent.exploration_policy,
+    frames_per_batch=env.n_states,
+    total_frames=100 * env.n_states,
     split_trajs=False,
     device="cpu",
 )
@@ -86,54 +83,53 @@ wandb.init(
     project="base_toy",
     name=f"base_toy|{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
     config={
-        "base_agent.buffer_size": base_agent.buffer_size,
-        "base_agent.sub_batch_size": base_agent.sub_batch_size,
+        "batch_size": collector.frames_per_batch,
         "optimal_return": optimal_return,
         "gap": gap,
-        "total_frames": base_collector.total_frames,
-        "left_reward": base_env.left_reward,
-        "right_reward": base_env.right_reward,
-        "down_reward": base_env.down_reward,
-        "up_reward": base_env.up_reward,
-        "n_pos": base_env.n_pos,
-        "big_reward": base_env.big_reward,
-        "punishment": base_env.punishment,
+        "total_frames": collector.total_frames,
+        "left_reward": env.left_reward,
+        "right_reward": env.right_reward,
+        "down_reward": env.down_reward,
+        "up_reward": env.up_reward,
+        "n_states": env.n_states,
+        "big_reward": env.big_reward,
+        "punishment": env.punishment,
         "init_constraints": init_constraints,
         "halfway_constraints": halfway_constraints,
-        "lr": base_agent.lr,
-        "loss type": base_agent.loss_module.__class__.__name__,
+        "w_lr": agent.w_lr,
+        "theta_lr": agent.theta_lr,
     },
 )
 
-pbar = tqdm(total=base_collector.total_frames)
+pbar = tqdm(total=collector.total_frames)
 
 
-n_batches = base_collector.total_frames // base_collector.frames_per_batch
-for i, td in enumerate(base_collector):
+n_batches = collector.total_frames // collector.frames_per_batch
+for i, td in enumerate(collector):
     if halfway_constraints and i == n_batches // 2:
-        base_env.set_constraint_state(True)
-    losses, max_grad_norm = base_agent.process_batch(td)
-    with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
-        # Always have constraints in the evaluation
-        prev_constraints = base_env.constraints_enabled
-        base_env.set_constraint_state(True)
-        eval_td = base_env.rollout(10 * base_env.n_pos, base_agent.policy)
-        baseline_td = base_env.rollout(10 * base_env.n_pos, baseline_policy)
-        base_env.set_constraint_state(prev_constraints)
-        # print_base_rollout(eval_td)
+        env.set_constraint_state(True)
+    td_errors = agent.process_batch(td)
+
+    # Evaluation. Always have constraints in the evaluation
+    prev_constraints = env.constraints_enabled
+    env.set_constraint_state(True)
+    eval_td = env.rollout(10 * env.n_states, agent.explotation_policy)
+    baseline_td = env.rollout(10 * env.n_states, baseline_policy)
+    env.set_constraint_state(prev_constraints)
+    # print_rollout(eval_td)
     # print(f"max_grad_norm: {max_grad_norm}")
+    value_dict = {f"value of state {i}": agent.w[i].item() for i in range(env.n_states)}
     wandb.log(
         {
-            "state distribution": wandb.Histogram(td["pos"]),
+            "state distribution": wandb.Histogram(td["state"]),
             "reward distribution": wandb.Histogram(td["next", "reward"]),
-            "loss_objective": losses["loss_objective"],
-            "loss_critic": losses["loss_critic"],
-            # "loss_entropy": losses["loss_entropy"],
-            "max_grad_norm": max_grad_norm,
+            "mean td_error": sum(td_errors) / len(td_errors),
+            "max td_error": max(td_errors),
             "eval return": eval_td["next", "reward"].sum().item(),
             "baseline return": baseline_td["next", "reward"].sum().item(),
-            "eval state distribution": wandb.Histogram(eval_td["pos"]),
+            "eval state distribution": wandb.Histogram(eval_td["state"]),
             "eval reward distribution": wandb.Histogram(eval_td["next", "reward"]),
+            **value_dict,
         }
     )
     pbar.update(td.numel())

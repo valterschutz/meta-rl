@@ -97,7 +97,7 @@ class BaseEnv(EnvBase):
         right_reward,
         down_reward,
         up_reward,
-        n_pos,
+        n_states,
         big_reward,
         random_start=False,
         punishment=0,
@@ -107,12 +107,12 @@ class BaseEnv(EnvBase):
     ):
         super().__init__(device=device, batch_size=[])
 
-        assert n_pos % 2 == 0, "n_pos only tested for even numbers"
+        assert n_states % 2 == 0, "n_states only tested for even numbers"
         self.left_reward = left_reward
         self.right_reward = right_reward
         self.down_reward = down_reward
         self.up_reward = up_reward
-        self.n_pos = n_pos
+        self.n_states = n_states
         self.big_reward = big_reward
         self.random_start = random_start
         self.punishment = punishment
@@ -125,11 +125,11 @@ class BaseEnv(EnvBase):
 
     def _make_spec(self):
         self.observation_spec = Composite(
-            pos=Categorical(self.n_pos, shape=(), dtype=torch.int32),
+            state=Categorical(self.n_states, shape=(), dtype=torch.int32),
             shape=(),
         )
         self.state_spec = Composite(
-            pos=Categorical(self.n_pos, shape=(), dtype=torch.int32), shape=()
+            state=Categorical(self.n_states, shape=(), dtype=torch.int32), shape=()
         )
         self.action_spec = Categorical(4, shape=(), dtype=torch.int32)
         self.reward_spec = UnboundedContinuous(shape=(1,), dtype=torch.float32)
@@ -141,15 +141,15 @@ class BaseEnv(EnvBase):
             shape = td.shape
 
         if self.random_start:
-            pos = torch.randint(
-                0, self.n_pos, shape=shape, dtype=torch.int32, device=self.device
+            state = torch.randint(
+                0, self.n_states, shape=shape, dtype=torch.int32, device=self.device
             )
         else:
-            pos = torch.zeros(shape, dtype=torch.int32, device=self.device)
+            state = torch.zeros(shape, dtype=torch.int32, device=self.device)
 
         out = TensorDict(
             {
-                "pos": pos,
+                "state": state,
             },
             batch_size=shape,
         )
@@ -160,25 +160,25 @@ class BaseEnv(EnvBase):
         self.rng = rng
 
     def _step(self, td):
-        pos = td["pos"]
+        state = td["state"]
         action = td["action"]  # Action order: left, right, down, up
         # x, y, n_pos, big_reward = self.x, self.y, self.n_pos, self.big_reward
 
-        next_pos = pos.clone()
-        reward = 0 * torch.ones_like(pos, dtype=torch.int)
+        next_state = state.clone()
+        reward = 0 * torch.ones_like(state, dtype=torch.int)
 
-        mask_even = pos % 2 == 0
+        mask_even = state % 2 == 0
 
         # Enable left action by default
-        next_pos = torch.where(action == 0, pos - 1, next_pos)
+        next_state = torch.where(action == 0, state - 1, next_state)
         # Enable right action by default
-        next_pos = torch.where(action == 1, pos + 1, next_pos)
+        next_state = torch.where(action == 1, state + 1, next_state)
 
         # For even pos, enable down and up actions
         # Down action
-        next_pos = torch.where(mask_even & (action == 2), pos - 2, next_pos)
+        next_state = torch.where(mask_even & (action == 2), state - 2, next_state)
         # Up action
-        next_pos = torch.where(mask_even & (action == 3), pos + 2, next_pos)
+        next_state = torch.where(mask_even & (action == 3), state + 2, next_state)
 
         if self.constraints_enabled:
             # Left action
@@ -191,26 +191,28 @@ class BaseEnv(EnvBase):
             reward = torch.where(mask_even & (action == 3), self.up_reward, reward)
 
         # Ensure that we can never move past the end pos
-        next_pos = torch.where(next_pos >= self.n_pos, self.n_pos - 1, next_pos)
+        next_state = torch.where(
+            next_state >= self.n_states, self.n_states - 1, next_state
+        )
 
         # Ensure that we can never move before the start pos
-        next_pos = torch.where(next_pos < 0, pos, next_pos)
+        next_state = torch.where(next_state < 0, state, next_state)
 
         # If we did not move, terminate the episode and (maybe) punish
         # done = torch.where(next_pos == pos, 1.0, 0.0).to(torch.bool)
-        done = torch.zeros_like(pos, dtype=torch.bool)  # TODO
-        reward = torch.where(next_pos == pos, -self.punishment, reward)
+        done = torch.zeros_like(state, dtype=torch.bool)  # TODO
+        reward = torch.where(next_state == state, -self.punishment, reward)
 
         # Big reward for reaching the end pos, overriding to possible constraints
-        reward = torch.where(next_pos == self.n_pos - 1, self.big_reward, reward)
+        reward = torch.where(next_state == self.n_states - 1, self.big_reward, reward)
         # If we reach final pos, we're done
-        done = torch.where(next_pos == self.n_pos - 1, 1.0, done).to(torch.bool)
+        done = torch.where(next_state == self.n_states - 1, 1.0, done).to(torch.bool)
         # We're also done if the step count is too high, e.g ten times the number of positions
         # done = torch.where(pos > 10 * self.n_pos, 1.0, done).to(torch.bool)
 
         out = TensorDict(
             {
-                "pos": next_pos,
+                "state": next_state,
                 "reward": reward,
                 "done": done,
             },
