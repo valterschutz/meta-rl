@@ -211,6 +211,21 @@ class ValueIterationAgent:
         return td
 
 
+def slow_policy(td):
+    # Always go right
+    td["action"] = torch.tensor(1, device=td.device)
+    return td
+
+
+def fast_policy(td):
+    # Always go up in even states, otherwise go right
+    if td["state"] % 2 == 0:
+        td["action"] = torch.tensor(3, device=td.device)
+    else:
+        td["action"] = torch.tensor(1, device=td.device)
+    return td
+
+
 class MetaAgent:
     def __init__(self, state_spec, action_spec, device, max_grad_norm, lr):
         # We expect state_spec to be UnboundedContinuous and action_spec to be Binary

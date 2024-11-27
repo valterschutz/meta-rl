@@ -180,7 +180,9 @@ class BaseEnv(EnvBase):
         # Up action
         next_state = torch.where(mask_even & (action == 3), state + 2, next_state)
 
+        # print(f"Constraints enabled: {self.constraints_enabled}")
         if self.constraints_enabled:
+            # print(f"Constraints enabled")
             # Left action
             reward = torch.where(action == 0, self.left_reward, reward)
             # Right action
@@ -189,6 +191,8 @@ class BaseEnv(EnvBase):
             reward = torch.where(mask_even & (action == 2), self.down_reward, reward)
             # Up action
             reward = torch.where(mask_even & (action == 3), self.up_reward, reward)
+        # else:
+        # print(f"Constraints disabled")
 
         # Ensure that we can never move past the end pos
         next_state = torch.where(
@@ -198,17 +202,14 @@ class BaseEnv(EnvBase):
         # Ensure that we can never move before the start pos
         next_state = torch.where(next_state < 0, state, next_state)
 
-        # If we did not move, terminate the episode and (maybe) punish
-        # done = torch.where(next_pos == pos, 1.0, 0.0).to(torch.bool)
-        done = torch.zeros_like(state, dtype=torch.bool)  # TODO
+        # Punish for moving to the same pos
+        done = torch.zeros_like(state, dtype=torch.bool)
         reward = torch.where(next_state == state, -self.punishment, reward)
 
-        # Big reward for reaching the end pos, overriding to possible constraints
+        # Big reward for reaching the end pos, overriding the possible constraints
         reward = torch.where(next_state == self.n_states - 1, self.big_reward, reward)
         # If we reach final pos, we're done
         done = torch.where(next_state == self.n_states - 1, 1.0, done).to(torch.bool)
-        # We're also done if the step count is too high, e.g ten times the number of positions
-        # done = torch.where(pos > 10 * self.n_pos, 1.0, done).to(torch.bool)
 
         out = TensorDict(
             {
@@ -226,7 +227,7 @@ class BaseEnv(EnvBase):
 
 def get_base_env(**kwargs):
     env = BaseEnv(**kwargs)
-    env.set_constraint_state(kwargs["constraints_enabled"])
+    env.constraints_enabled = kwargs["constraints_enabled"]
     env = TransformedEnv(env, Compose(StepCounter()))
     check_env_specs(env)
     return env

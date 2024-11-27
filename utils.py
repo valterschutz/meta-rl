@@ -62,12 +62,14 @@ def log(pbar, meta_td, base_eval_td, episode, step):
     )
 
 
-def print_base_rollout(td):
+def print_base_rollout(td, gamma):
     # Prints visited states, actions taken, and rewards received in a base rollout
+    G = 0
     print("<step>: (<state>, <action>, <next_reward>)")
     for i in range(td["step_count"].max().item() + 1):
+        G += td["next", "reward"][i].item() * gamma**i
         print(
             f"{i}: ({td['state'][i].item()}, {td['action'][i].item()}, {td['next', 'reward'][i].item()})"
         )
-    print(f"Return: {td['next', 'reward'].sum().item()}")
+    print(f"Return: {G}")
     print()

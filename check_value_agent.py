@@ -1,4 +1,6 @@
-# Verify that value agent is correctly implemented
+# Verify that value agent is correctly implemented, CHECK
+# Interesting behavior with n_states=30: with discounting, the optimal policy is actually to take the slow path in the beginning,
+# and switch to the fast path in the end
 
 from tqdm import tqdm
 from datetime import datetime
@@ -15,22 +17,27 @@ import torch
 import wandb
 
 from env import get_base_env
-from agents import ValueIterationAgent
+from agents import ValueIterationAgent, slow_policy, fast_policy
 from utils import log, print_base_rollout
 
 device = torch.device("cpu")
 n_actions = 4
 
-optimal_return = 0.3  # Optimal return using slow path
-gap = 0.2  # How much worse the fast path is
+return_x = 0.2  # Optimal return using slow path
+return_y = 0.1  # Return for using fast path
 big_reward = 10.0
-n_states = 10
+n_states = 30
+gamma = 0.99
+# gamma = 1
 
-# Assuming n_pos is even, the below equations should hold
-# (n_pos-2)*x + big_reward = optimal_return
-x = (optimal_return - big_reward) / (n_states - 2)
-# (n_pos-2)/2*y + big_reward = optimal_return - gap
-y = (optimal_return - gap - big_reward) * 2 / (n_states - 2)
+# Assuming n_pos is even, calculate x and y
+assert n_states % 2 == 0
+nx = n_states - 2
+ny = (n_states - 2) // 2
+x = (return_x - big_reward * gamma**nx) / sum(gamma**k for k in range(0, nx))
+y = (return_y - big_reward * gamma**ny) / sum(gamma**k for k in range(0, ny))
+# x = -1
+# y = -3
 print(f"x: {x}, y: {y}")
 
 # Base env
@@ -42,7 +49,7 @@ env = get_base_env(
     n_states=n_states,
     big_reward=big_reward,
     random_start=False,
-    punishment=min(-x, -y) / 2,
+    punishment=1,
     # punishment=0,
     seed=None,
     device="cpu",
@@ -50,22 +57,35 @@ env = get_base_env(
 ).to(device)
 check_env_specs(env)
 
-agent = ValueIterationAgent(env, gamma=0.99)
+print(f"Rollout with slow policy, without constraints:")
+td = env.rollout(100, slow_policy)
+print_base_rollout(td, gamma)
+print(f"Rollout with fast policy, without constraints:")
+td = env.rollout(100, fast_policy)
+print_base_rollout(td, gamma)
+
+agent = ValueIterationAgent(env, gamma=gamma)
 agent.update_values()
 print(f"Q-values without constraints:")
 print(agent.Q)
-
 # Check optimal behavior without constraints
 td = env.rollout(100, agent.policy)
 print(f"Optimal rollout without constraints:")
-print_base_rollout(td)
+print_base_rollout(td, gamma)
 
-env.constraints_enabled = True
+env.set_constraint_state(True)
+
+print(f"Rollout with slow policy, with constraints:")
+td = env.rollout(100, slow_policy)
+print_base_rollout(td, gamma)
+print(f"Rollout with fast policy, with constraints:")
+td = env.rollout(100, fast_policy)
+print_base_rollout(td, gamma)
+
 agent.update_values()
 print(f"Q-values with constraints:")
 print(agent.Q)
-
 # Check optimal behavior with constraints
 td = env.rollout(100, agent.policy)
 print(f"Optimal rollout with constraints:")
-print_base_rollout(td)
+print_base_rollout(td, gamma)
