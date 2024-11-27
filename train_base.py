@@ -16,7 +16,7 @@ import torch
 import wandb
 
 from env import get_base_env
-from agents import DiscreteACAgent
+from agents import BaseAgent
 from utils import log, print_base_rollout
 
 device = torch.device("cpu")
@@ -26,8 +26,8 @@ optimal_return = 0.2  # Optimal return using slow path
 gap = 0.1  # How much worse the fast path is
 big_reward = 10.0
 n_states = 10
-init_constraints = False  # Whether to start with constraints enabled
-halfway_constraints = True  # Whether to enable constraints halfway through training
+init_constraints = True  # Whether to start with constraints enabled
+halfway_constraints = False  # Whether to enable constraints halfway through training
 
 # Assuming n_pos is even, the below equations should hold
 # (n_pos-2)*x + big_reward = optimal_return
@@ -60,20 +60,22 @@ def baseline_policy(td):
     return td
 
 
-agent = DiscreteACAgent(
-    n_states=env.n_states,
-    n_actions=n_actions,
-    device="cpu",
-    w_lr=1e-2,
-    theta_lr=1e-3,
-    num_optim_epochs=100,
+agent = BaseAgent(
+    state_spec=env.state_spec,
+    action_spec=env.action_spec,
+    num_optim_epochs=10,
+    buffer_size=100,
+    sub_batch_size=20,
+    device=device,
+    max_grad_norm=1,
+    lr=1e-3,
 )
 
 collector = SyncDataCollector(
     env,
-    agent.exploration_policy,
-    frames_per_batch=env.n_states,
-    total_frames=200 * env.n_states,
+    agent.policy,
+    frames_per_batch=100,
+    total_frames=50_000,
     split_trajs=False,
     device="cpu",
 )
@@ -96,8 +98,7 @@ wandb.init(
         "punishment": env.punishment,
         "init_constraints": init_constraints,
         "halfway_constraints": halfway_constraints,
-        "w_lr": agent.w_lr,
-        "theta_lr": agent.theta_lr,
+        "lr": agent.lr,
         "num_optim_epochs": agent.num_optim_epochs,
     },
 )
@@ -109,28 +110,29 @@ n_batches = collector.total_frames // collector.frames_per_batch
 for i, td in enumerate(collector):
     if halfway_constraints and i == n_batches // 2:
         env.set_constraint_state(True)
-    td_errors = agent.process_batch(td)
+    losses, max_grad_norm = agent.process_batch(td)
 
-    # Evaluation. Always have constraints in the evaluation
-    prev_constraints = env.constraints_enabled
-    env.set_constraint_state(True)
-    eval_td = env.rollout(10 * env.n_states, agent.explotation_policy)
-    baseline_td = env.rollout(10 * env.n_states, baseline_policy)
-    env.set_constraint_state(prev_constraints)
+    with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
+        # Evaluation. Always have constraints in the evaluation
+        prev_constraints = env.constraints_enabled
+        env.set_constraint_state(True)
+        eval_td = env.rollout(10 * env.n_states, agent.policy)
+        baseline_td = env.rollout(10 * env.n_states, baseline_policy)
+        env.set_constraint_state(prev_constraints)
     # print_rollout(eval_td)
     # print(f"max_grad_norm: {max_grad_norm}")
-    value_dict = {f"value of state {i}": agent.w[i].item() for i in range(env.n_states)}
     wandb.log(
         {
             "state distribution": wandb.Histogram(td["state"]),
             "reward distribution": wandb.Histogram(td["next", "reward"]),
-            "mean td_error": sum(td_errors) / len(td_errors),
-            "max td_error": max(td_errors),
+            "loss_objective": losses["loss_objective"].item(),
+            "loss_critic": losses["loss_critic"].item(),
+            "loss_entropy": losses["loss_entropy"].item(),
+            "max_grad_norm": max_grad_norm,
             "eval return": eval_td["next", "reward"].sum().item(),
             "baseline return": baseline_td["next", "reward"].sum().item(),
             "eval state distribution": wandb.Histogram(eval_td["state"]),
             "eval reward distribution": wandb.Histogram(eval_td["next", "reward"]),
-            **value_dict,
         }
     )
     pbar.update(td.numel())
