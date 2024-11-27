@@ -85,27 +85,6 @@ class BaseAgent:
             return_log_prob=True,
         )
 
-    def initialize_qvalue(self):
-        n_states = self.state_spec["state"].n
-        n_actions = self.action_spec.n
-
-        self.value_net = nn.Sequential(
-            OneHotLayer(num_classes=n_states),
-            nn.Linear(n_states, self.hidden_units),
-            nn.Tanh(),
-            nn.Linear(self.hidden_units, n_actions),
-        ).to(self.device)
-        self.value_module = ValueOperator(
-            self.qvalue_net,
-            in_keys=["state", "action"],
-            out_keys=["state_action_value"],
-        )
-        self.advantage_module = GAE(
-            gamma=0.98,
-            lmbda=0.96,
-            value_network=self.qvalue_module,
-        )
-
     def initialize_critic(self):
         n_states = self.state_spec["state"].n
 
@@ -120,7 +99,7 @@ class BaseAgent:
         )
         self.advantage_module = GAE(
             gamma=1,
-            lmbda=0.96,
+            lmbda=0.5,
             value_network=self.value_module,
         )
 

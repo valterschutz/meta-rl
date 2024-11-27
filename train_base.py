@@ -1,5 +1,6 @@
 # TODO:
 # - [ ] Make sure that base agent loss converges in each meta episode before applying meta actions
+# - [ ]
 
 from tqdm import tqdm
 from datetime import datetime
@@ -25,9 +26,10 @@ n_actions = 4
 optimal_return = 0.2  # Optimal return using slow path
 gap = 0.1  # How much worse the fast path is
 big_reward = 10.0
-n_states = 10
+n_states = 30
 init_constraints = False  # Whether to start with constraints enabled
-halfway_constraints = True  # Whether to enable constraints halfway through training
+constraints_when = 0.3  # Whether to enable constraints at some fraction of the way
+# TODO: use discounting?
 
 # Assuming n_pos is even, the below equations should hold
 # (n_pos-2)*x + big_reward = optimal_return
@@ -45,7 +47,7 @@ env = get_base_env(
     n_states=n_states,
     big_reward=big_reward,
     random_start=False,
-    punishment=0.0,
+    punishment=min(-x, -y) / 2,
     seed=None,
     device="cpu",
     constraints_enabled=False,
@@ -65,17 +67,17 @@ agent = BaseAgent(
     action_spec=env.action_spec,
     num_optim_epochs=10,
     buffer_size=100,
-    sub_batch_size=20,
+    sub_batch_size=100,
     device=device,
     max_grad_norm=1,
-    lr=1e-3,
+    lr=1e-2,
 )
 
 collector = SyncDataCollector(
     env,
     agent.policy,
-    frames_per_batch=100,
-    total_frames=50_000,
+    frames_per_batch=agent.buffer_size,
+    total_frames=10_000,
     split_trajs=False,
     device="cpu",
 )
@@ -97,7 +99,7 @@ wandb.init(
         "big_reward": env.big_reward,
         "punishment": env.punishment,
         "init_constraints": init_constraints,
-        "halfway_constraints": halfway_constraints,
+        "constraints_when": constraints_when,
         "lr": agent.lr,
         "num_optim_epochs": agent.num_optim_epochs,
     },
@@ -108,7 +110,7 @@ pbar = tqdm(total=collector.total_frames)
 
 n_batches = collector.total_frames // collector.frames_per_batch
 for i, td in enumerate(collector):
-    if halfway_constraints and i == n_batches // 2:
+    if constraints_when is not None and i / n_batches >= constraints_when:
         env.set_constraint_state(True)
     losses, max_grad_norm = agent.process_batch(td)
 
@@ -133,6 +135,7 @@ for i, td in enumerate(collector):
             "baseline return": baseline_td["next", "reward"].sum().item(),
             "eval state distribution": wandb.Histogram(eval_td["state"]),
             "eval reward distribution": wandb.Histogram(eval_td["next", "reward"]),
+            "constraints active": float(env.constraints_enabled),
         }
     )
     pbar.update(td.numel())
