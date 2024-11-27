@@ -156,6 +156,61 @@ class BaseAgent:
         return losses, max_grad_norm
 
 
+class ValueIterationAgent:
+    def __init__(self, env, gamma):
+        self.env = env
+        self.tol = 1e-3
+        self.Q = torch.zeros((env.n_states, env.action_spec.n), device=env.device)
+        # self.lr = 1e-1
+        self.gamma = gamma
+
+    def update_values(self):
+        # Update values
+        n_states = self.env.n_states
+        n_actions = self.env.action_spec.n
+        td = TensorDict(
+            {
+                "state": torch.arange(n_states - 1, device=self.env.device)[:, None]
+                .repeat(1, n_actions)
+                .reshape(-1),
+                "action": torch.arange(n_actions, device=self.env.device).repeat(
+                    n_states - 1
+                ),
+                "step_count": torch.zeros(
+                    (n_states - 1) * n_actions, device=self.env.device
+                ),
+            },
+            batch_size=[(n_states - 1) * n_actions],
+        )
+        td = self.env.step(td)
+        # print(f"state: {td['state']}")
+        # print(f"action: {td['action']}")
+        # print(f"next_state: {td['next','state']}")
+        # print(f"reward: {td['next','reward']}")
+        delta = float("inf")
+        while delta > self.tol:
+            delta = 0.0
+            for state in range(n_states - 1):
+                for action in range(n_actions):
+                    idx = state * n_actions + action
+                    next_state = td["next", "state"][idx].item()
+                    reward = td["next", "reward"][idx].item()
+                    prev_Q = self.Q[state, action].item()
+                    self.Q[state, action] = (
+                        reward + self.gamma * self.Q[next_state, :].max().item()
+                    )
+                    delta = max(
+                        delta,
+                        (prev_Q - self.Q[state, action]).abs().item(),
+                    )
+            # fail
+
+    def policy(self, td):
+        # Policy is deterministic
+        td["action"] = self.Q[td["state"].long(), :].argmax(dim=-1)
+        return td
+
+
 class MetaAgent:
     def __init__(self, state_spec, action_spec, device, max_grad_norm, lr):
         # We expect state_spec to be UnboundedContinuous and action_spec to be Binary
