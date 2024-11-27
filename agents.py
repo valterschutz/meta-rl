@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torchrl.modules.tensordict_module import ProbabilisticActor, ValueOperator
 from torchrl.data.replay_buffers import LazyTensorStorage, SamplerWithoutReplacement
 from torchrl.data import Categorical, Binary, UnboundedContinuous, ReplayBuffer
-from torchrl.objectives import ClipPPOLoss, A2CLoss
+from torchrl.objectives import ClipPPOLoss, A2CLoss, DDPGLoss
 from torchrl.objectives.value import GAE
 
 from utils import OneHotLayer
@@ -54,9 +54,13 @@ class BaseAgent:
         self.loss_module = ClipPPOLoss(
             actor_network=self.policy,
             critic_network=self.value_module,
-            clip_epsilon=0.05,
-            entropy_bonus=True,
+            clip_epsilon=0.2,
+            entropy_bonus=False,
         )
+        # self.loss_module = DDPGLoss(
+        #     actor_network=self.policy,
+        #     value_network=self.value_module,
+        # )
         self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
         self.replay_buffer.empty()
 
@@ -81,6 +85,27 @@ class BaseAgent:
             return_log_prob=True,
         )
 
+    def initialize_qvalue(self):
+        n_states = self.state_spec["state"].n
+        n_actions = self.action_spec.n
+
+        self.value_net = nn.Sequential(
+            OneHotLayer(num_classes=n_states),
+            nn.Linear(n_states, self.hidden_units),
+            nn.Tanh(),
+            nn.Linear(self.hidden_units, n_actions),
+        ).to(self.device)
+        self.value_module = ValueOperator(
+            self.qvalue_net,
+            in_keys=["state", "action"],
+            out_keys=["state_action_value"],
+        )
+        self.advantage_module = GAE(
+            gamma=0.98,
+            lmbda=0.96,
+            value_network=self.qvalue_module,
+        )
+
     def initialize_critic(self):
         n_states = self.state_spec["state"].n
 
@@ -94,7 +119,7 @@ class BaseAgent:
             self.value_net, in_keys=["state"], out_keys=["state_value"]
         )
         self.advantage_module = GAE(
-            gamma=0.98,
+            gamma=1,
             lmbda=0.96,
             value_network=self.value_module,
         )
@@ -117,11 +142,12 @@ class BaseAgent:
                 loss = (
                     loss_td["loss_objective"]
                     + loss_td["loss_critic"]
-                    + loss_td["loss_entropy"]
+                    # + loss_td["loss_entropy"]
                 )
                 losses_objective.append(loss_td["loss_objective"].mean().item())
                 losses_critic.append(loss_td["loss_critic"].mean().item())
-                losses_entropy.append(loss_td["loss_entropy"].mean().item())
+                # losses_entropy.append(loss_td["loss_entropy"].mean().item())
+                losses_entropy.append(0)
                 loss.backward()
                 grad_norm = nn.utils.clip_grad_norm_(
                     self.loss_module.parameters(), self.max_grad_norm
@@ -131,17 +157,17 @@ class BaseAgent:
         losses = TensorDict(
             {
                 "loss_objective": torch.tensor(
-                    sum(losses_objective) / max(1, len(losses_objective)),
+                    sum(losses_objective) / len(losses_objective),
                     device=self.device,
                     dtype=torch.float32,
                 ),
                 "loss_critic": torch.tensor(
-                    sum(losses_critic) / max(1, len(losses_critic)),
+                    sum(losses_critic) / len(losses_critic),
                     device=self.device,
                     dtype=torch.float32,
                 ),
                 "loss_entropy": torch.tensor(
-                    sum(losses_entropy) / max(1, len(losses_entropy)),
+                    sum(losses_entropy) / len(losses_entropy),
                     device=self.device,
                     dtype=torch.float32,
                 ),

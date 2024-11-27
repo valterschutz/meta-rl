@@ -26,8 +26,8 @@ optimal_return = 0.2  # Optimal return using slow path
 gap = 0.1  # How much worse the fast path is
 big_reward = 10.0
 n_states = 10
-init_constraints = True  # Whether to start with constraints enabled
-halfway_constraints = False  # Whether to enable constraints halfway through training
+init_constraints = False  # Whether to start with constraints enabled
+halfway_constraints = True  # Whether to enable constraints halfway through training
 
 # Assuming n_pos is even, the below equations should hold
 # (n_pos-2)*x + big_reward = optimal_return
