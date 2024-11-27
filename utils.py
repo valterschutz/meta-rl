@@ -73,3 +73,11 @@ def print_base_rollout(td, gamma):
         )
     print(f"Return: {G}")
     print()
+
+
+def calc_return(td, gamma):
+    # Calculate return for a single rollout
+    G = 0
+    for i in range(len(td)):
+        G += td["next", "reward"][i].item() * gamma**i
+    return G

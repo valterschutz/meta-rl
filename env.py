@@ -224,13 +224,23 @@ class BaseEnv(EnvBase):
     def set_constraint_state(self, constraints_enabled):
         self.constraints_enabled = constraints_enabled
 
+    @staticmethod
+    def calculate_xy(n_states, return_x, return_y, big_reward, gamma):
+        # Assuming n_pos is even, calculate x and y
+        assert n_states % 2 == 0
+        nx = n_states - 2
+        ny = (n_states - 2) // 2
+        x = (return_x - big_reward * gamma**nx) / sum(gamma**k for k in range(0, nx))
+        y = (return_y - big_reward * gamma**ny) / sum(gamma**k for k in range(0, ny))
+        return x, y
 
-def get_base_env(**kwargs):
-    env = BaseEnv(**kwargs)
-    env.constraints_enabled = kwargs["constraints_enabled"]
-    env = TransformedEnv(env, Compose(StepCounter()))
-    check_env_specs(env)
-    return env
+    @classmethod
+    def get_base_env(cls, **kwargs):
+        env = cls(**kwargs)
+        env.constraints_enabled = kwargs["constraints_enabled"]
+        env = TransformedEnv(env, Compose(StepCounter()))
+        check_env_specs(env)
+        return env
 
 
 class MetaEnv(EnvBase):

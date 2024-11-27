@@ -16,7 +16,7 @@ from torchrl.collectors import SyncDataCollector
 import torch
 import wandb
 
-from env import get_base_env
+from env import BaseEnv
 from agents import ValueIterationAgent, slow_policy, fast_policy
 from utils import log, print_base_rollout
 
@@ -28,20 +28,12 @@ return_y = 0.1  # Return for using fast path
 big_reward = 10.0
 n_states = 30
 gamma = 0.99
-# gamma = 1
 
 # Assuming n_pos is even, calculate x and y
-assert n_states % 2 == 0
-nx = n_states - 2
-ny = (n_states - 2) // 2
-x = (return_x - big_reward * gamma**nx) / sum(gamma**k for k in range(0, nx))
-y = (return_y - big_reward * gamma**ny) / sum(gamma**k for k in range(0, ny))
-# x = -1
-# y = -3
-print(f"x: {x}, y: {y}")
+x, y = BaseEnv.calculate_xy(n_states, return_x, return_y, big_reward, gamma)
 
 # Base env
-env = get_base_env(
+env = BaseEnv.get_base_env(
     left_reward=x,
     right_reward=x,
     down_reward=y,
@@ -49,8 +41,7 @@ env = get_base_env(
     n_states=n_states,
     big_reward=big_reward,
     random_start=False,
-    punishment=1,
-    # punishment=0,
+    punishment=0,
     seed=None,
     device="cpu",
     constraints_enabled=False,

@@ -16,30 +16,28 @@ from torchrl.collectors import SyncDataCollector
 import torch
 import wandb
 
-from env import get_base_env
-from agents import BaseAgent
-from utils import log, print_base_rollout
+from env import BaseEnv
+from agents import BaseAgent, slow_policy, fast_policy, ValueIterationAgent
+from utils import log, print_base_rollout, calc_return
 
 device = torch.device("cpu")
 n_actions = 4
 
-optimal_return = 0.2  # Optimal return using slow path
-gap = 0.1  # How much worse the fast path is
-big_reward = 10.0
-n_states = 30
 init_constraints = False  # Whether to start with constraints enabled
 constraints_when = 0.3  # Whether to enable constraints at some fraction of the way
-# TODO: use discounting?
 
-# Assuming n_pos is even, the below equations should hold
-# (n_pos-2)*x + big_reward = optimal_return
-x = (optimal_return - big_reward) / (n_states - 2)
-# (n_pos-2)/2*y + big_reward = optimal_return - gap
-y = (optimal_return - gap - big_reward) * 2 / (n_states - 2)
-print(f"x: {x}, y: {y}")
+return_x = 0.2  # Optimal return using slow path
+return_y = 0.1  # Return for using fast path
+big_reward = 10.0
+n_states = 30
+gamma = 0.99
+rollout_timeout = 10 * n_states
+
+# Assuming n_pos is even, calculate x and y
+x, y = BaseEnv.calculate_xy(n_states, return_x, return_y, big_reward, gamma)
 
 # Base env
-env = get_base_env(
+env = BaseEnv.get_base_env(
     left_reward=x,
     right_reward=x,
     down_reward=y,
@@ -47,7 +45,7 @@ env = get_base_env(
     n_states=n_states,
     big_reward=big_reward,
     random_start=False,
-    punishment=min(-x, -y) / 2,
+    punishment=0,
     seed=None,
     device="cpu",
     constraints_enabled=False,
@@ -56,11 +54,10 @@ check_env_specs(env)
 env.set_constraint_state(init_constraints)
 
 
-# Baseline agent, always goes right (which is optimal)
-def baseline_policy(td):
-    td["action"] = 1
-    return td
-
+# A couple of baseline agents
+value_agent = ValueIterationAgent(env, gamma=gamma)
+value_agent.update_values()
+# also slow_policy and fast_policy
 
 agent = BaseAgent(
     state_spec=env.state_spec,
@@ -88,8 +85,9 @@ wandb.init(
     name=f"base_toy|{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
     config={
         "batch_size": collector.frames_per_batch,
-        "optimal_return": optimal_return,
-        "gap": gap,
+        "return_x": return_x,
+        "return_y": return_y,
+        "gamma": gamma,
         "total_frames": collector.total_frames,
         "left_reward": env.left_reward,
         "right_reward": env.right_reward,
@@ -112,27 +110,38 @@ n_batches = collector.total_frames // collector.frames_per_batch
 for i, td in enumerate(collector):
     if constraints_when is not None and i / n_batches >= constraints_when:
         env.set_constraint_state(True)
+        value_agent.update_values()
     losses, max_grad_norm = agent.process_batch(td)
 
     with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
         # Evaluation. Always have constraints in the evaluation
-        prev_constraints = env.constraints_enabled
-        env.set_constraint_state(True)
-        eval_td = env.rollout(10 * env.n_states, agent.policy)
-        baseline_td = env.rollout(10 * env.n_states, baseline_policy)
-        env.set_constraint_state(prev_constraints)
-    # print_rollout(eval_td)
-    # print(f"max_grad_norm: {max_grad_norm}")
+        # prev_constraints = env.constraints_enabled
+        # env.set_constraint_state(True)
+        eval_td = env.rollout(rollout_timeout, agent.policy)
+        # baseline_td = env.rollout(rollout_timeout, baseline_policy)
+        # env.set_constraint_state(prev_constraints)
+    agent_return = calc_return(eval_td, gamma)
+    # Slow policy benchmark
+    slow_td = env.rollout(rollout_timeout, slow_policy)
+    slow_return = calc_return(slow_td, gamma)
+    # Fast policy benchmark
+    fast_td = env.rollout(rollout_timeout, fast_policy)
+    fast_return = calc_return(fast_td, gamma)
+    # Optimal policy benchmark
+    optimal_td = env.rollout(rollout_timeout, value_agent.policy)
+    optimal_return = calc_return(optimal_td, gamma)
     wandb.log(
         {
-            "state distribution": wandb.Histogram(td["state"]),
-            "reward distribution": wandb.Histogram(td["next", "reward"]),
+            "train state distribution": wandb.Histogram(td["state"]),
+            "train reward distribution": wandb.Histogram(td["next", "reward"]),
             "loss_objective": losses["loss_objective"].item(),
             "loss_critic": losses["loss_critic"].item(),
             "loss_entropy": losses["loss_entropy"].item(),
             "max_grad_norm": max_grad_norm,
-            "eval return": eval_td["next", "reward"].sum().item(),
-            "baseline return": baseline_td["next", "reward"].sum().item(),
+            "eval return": agent_return,
+            "eval optimal return": optimal_return,
+            "eval slow return": slow_return,
+            "eval fast return": fast_return,
             "eval state distribution": wandb.Histogram(eval_td["state"]),
             "eval reward distribution": wandb.Histogram(eval_td["next", "reward"]),
             "constraints active": float(env.constraints_enabled),
