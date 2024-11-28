@@ -1,0 +1,19 @@
+{
+    "n_states": 20,
+    "return_x": 0.2,
+    "return_y": 0.1,
+    "big_reward": 10,
+    "gamma": 0.99,
+    "punishment": 0.0,
+    "device": "cpu",
+    "num_optim_epochs": 10,
+    "batch_size": 50,
+    "max_grad_norm": 1,
+    "lmbda": 0.5,
+    "total_frames": 1000,
+    "rollout_timeout": 200,
+    "lr": 2e-2,
+    "constraints_enabled": true,
+    "clip_epsilon": 0.2,
+    "use_entropy": true
+}

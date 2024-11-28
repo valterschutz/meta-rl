@@ -278,19 +278,12 @@ class BaseEnv(EnvBase):
 
 
 class MetaEnv(EnvBase):
-    def __init__(self, base_env, base_agent, total_frames, device, seed=None):
+    def __init__(self, base_env, base_agent, base_collector, device, seed=None):
         super().__init__(device=device, batch_size=[])
         self.base_env = base_env
         self.base_agent = base_agent
 
-        self.base_collector = SyncDataCollector(
-            self.base_env,
-            self.base_agent.policy,
-            frames_per_batch=self.base_agent.buffer_size,
-            total_frames=-1,
-            split_trajs=False,
-            device="cpu",
-        )
+        self.base_collector = base_collector
         self.base_iter = iter(self.base_collector)
 
         self._make_spec()

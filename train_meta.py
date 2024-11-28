@@ -1,68 +1,41 @@
 # TODO:
 # - [X] Make sure that base agent loss converges in each meta episode before applying meta actions
 
-from tqdm import tqdm
+import json
+import sys
 from datetime import datetime
 
-from torchrl.envs.utils import (
-    check_env_specs,
-    step_mdp,
-    set_exploration_type,
-    ExplorationType,
-)
-from torchrl.collectors import SyncDataCollector
-
 import torch
-import wandb
-
-from env import get_base_env, MetaEnv
-from agents import BaseAgent, MetaAgent
-from utils import log
-
-return_x = 0.2  # Optimal return using slow path
-return_y = 0.1  # Return for using fast path
-big_reward = 10.0
-n_states = 20
-gamma = 0.9
-rollout_timeout = 10 * n_states
-meta_episodes = 2
-meta_steps_per_episode = 100  # TODO: 10 should be enough
-device = torch.device("cpu")
-gamma = 0.9
-
-# Base env
-base_env = get_base_env(
-    left_reward=0,
-    right_reward=0,
-    down_reward=0,
-    up_reward=0,
-    n_pos=n_pos,
-    big_reward=big_reward,
-    random_start=False,
-    punishment=0.0,
-    seed=None,
-    device="cpu",
-    constraints_enabled=True,
-).to(device)
-check_env_specs(base_env)
-
-# Base agent
-base_agent = BaseAgent(
-    state_spec=base_env.state_spec,
-    action_spec=base_env.action_spec,
-    num_optim_epochs=10,
-    buffer_size=20,
-    sub_batch_size=20,
-    device="cpu",
-    max_grad_norm=1,
-    lr=1e-2,
-    gamma=gamma,
-    lmbda=0.5,
+from torchrl.envs.utils import (
+    ExplorationType,
+    check_env_specs,
+    set_exploration_type,
+    step_mdp,
 )
+from tqdm import tqdm
+
+import wandb
+from agents import MetaAgent
+from base import get_base_from_config
+from env import MetaEnv
+from utils import log, DictWrapper
+
+device = "cpu"
+
+with open(sys.argv[1], "r") as f:
+    base_config = json.load(f)
+with open(sys.argv[2], "r") as f:
+    meta_config = json.load(f)
+
+base_env, base_agent, base_collector = get_base_from_config(DictWrapper(base_config))
+
 
 # Meta env
 meta_env = MetaEnv(
-    base_env=base_env, base_agent=base_agent, total_frames=1_000, device=device
+    base_env=base_env,
+    base_agent=base_agent,
+    base_collector=base_collector,
+    device=device,
 )
 check_env_specs(meta_env)
 
@@ -71,23 +44,23 @@ meta_agent = MetaAgent(
     state_spec=meta_env.state_spec,
     action_spec=meta_env.action_spec,
     device=device,
-    max_grad_norm=1,
-    lr=1e-2,
+    max_grad_norm=meta_config["max_grad_norm"],
+    lr=meta_config["lr"],
 )
 
 wandb.login()
 wandb.init(
-    project="meta_toy",
-    name=f"meta_toy|{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
+    project="toy-meta-train",
+    name=f"toy-meta-train|{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
     config={
-        "base_agent.buffer_size": base_agent.buffer_size,
-        "n_states": n_states,
+        **{f"meta-{k}": v for k, v in meta_config.items()},
+        **{f"base-{k}": v for k, v in base_config.items()},
     },
 )
 
-pbar = tqdm(total=meta_steps_per_episode * meta_episodes)
+pbar = tqdm(total=meta_config["steps_per_episode"] * meta_config["episodes"])
 
-for i in range(meta_episodes):
+for i in range(meta_config.episodes):
     meta_td = meta_env.reset()  # Resets base agent in meta environment
     for j in range(meta_steps_per_episode):
         meta_td = meta_agent.policy(meta_td)

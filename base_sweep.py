@@ -6,7 +6,7 @@ wandb.login()
 
 
 def main():
-    wandb.init(project="base-sweep")
+    wandb.init(project="toy-base-sweep")
     return_dissimilarity = train_base(wandb.config)
     wandb.log({"return_dissimilarity": return_dissimilarity})
 
@@ -35,7 +35,7 @@ sweep_configuration = {
 }
 
 # 3: Start the sweep
-sweep_id = wandb.sweep(sweep=sweep_configuration, project="base-sweep")
+sweep_id = wandb.sweep(sweep=sweep_configuration, project="toy-base-sweep")
 
 # TODO: run overnight
 wandb.agent(sweep_id, function=main, count=1000)

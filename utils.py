@@ -1,21 +1,26 @@
+"""Utility functions for training and logging."""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 import wandb
 
 
 class OneHotLayer(nn.Module):
+    """Converts an integer single-element tensor to a one-hot encoded vector."""
+
     def __init__(self, num_classes):
         super().__init__()
         self.num_classes = num_classes
 
     def forward(self, x):
-        # Convert the integer state to one-hot encoded vector
         x_onehot = F.one_hot(x.to(torch.int64), num_classes=self.num_classes).float()
         return x_onehot
 
 
 def log(pbar, meta_td, base_eval_td, episode, step):
+    # TODO
     pbar.update(meta_td.numel())
     wandb.log(
         {
@@ -62,21 +67,9 @@ def log(pbar, meta_td, base_eval_td, episode, step):
     )
 
 
-def print_base_rollout(td, gamma):
-    # Prints visited states, actions taken, and rewards received in a base rollout
-    G = 0
-    print("<step>: (<state>, <action>, <next_reward>)")
-    for i in range(td["step_count"].max().item() + 1):
-        G += td["next", "reward"][i].item() * gamma**i
-        print(
-            f"{i}: ({td['state'][i].item()}, {td['action'][i].item()}, {td['next', 'reward'][i].item()})"
-        )
-    print(f"Return: {G}")
-    print()
-
-
 def calc_return(td, gamma):
-    # Calculate return for a single rollout
+    """Calculate return for a single rollout"""
+
     G = 0
     for i in range(len(td)):
         G += td["next", "reward"][i].item() * gamma**i
@@ -84,6 +77,8 @@ def calc_return(td, gamma):
 
 
 class DictWrapper:
+    """Wraps a normal dict such that its keys can be accessed as attributes."""
+
     def __init__(self, dict):
         # Set attributes from the dictionary
         for key, value in dict.items():

@@ -27,6 +27,9 @@ class BaseAgent:
         lr,
         gamma,
         lmbda,
+        # hidden_units,
+        clip_epsilon,
+        use_entropy,
     ):
         # We expect state_spec and action_spec to both be catogorical
         assert isinstance(state_spec["state"], Categorical)
@@ -41,9 +44,11 @@ class BaseAgent:
         self.device = device
         self.max_grad_norm = max_grad_norm
         self.lr = lr
-        self.hidden_units = 4
         self.gamma = gamma
         self.lmbda = lmbda
+        # self.hidden_units = hidden_units
+        self.clip_epsilon = clip_epsilon
+        self.use_entropy = use_entropy
 
         self.replay_buffer = ReplayBuffer(
             storage=LazyTensorStorage(max_size=self.buffer_size, device=self.device),
@@ -58,13 +63,9 @@ class BaseAgent:
         self.loss_module = ClipPPOLoss(
             actor_network=self.policy,
             critic_network=self.value_module,
-            clip_epsilon=0.2,
-            # entropy_bonus=True,
+            clip_epsilon=self.clip_epsilon,
+            entropy_bonus=self.use_entropy,
         )
-        # self.loss_module = DDPGLoss(
-        #     actor_network=self.policy,
-        #     value_network=self.value_module,
-        # )
         self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
         self.replay_buffer.empty()
 
@@ -74,9 +75,9 @@ class BaseAgent:
 
         self.actor_net = nn.Sequential(
             OneHotLayer(num_classes=n_states),
-            nn.Linear(n_states, self.hidden_units),
-            nn.Tanh(),
-            nn.Linear(self.hidden_units, n_actions),
+            # nn.Linear(n_states, self.hidden_units),
+            # nn.Tanh(),
+            nn.Linear(n_states, n_actions),
         ).to(self.device)
         self.policy = TensorDictModule(
             self.actor_net, in_keys=["state"], out_keys=["logits"]
@@ -94,9 +95,9 @@ class BaseAgent:
 
         self.value_net = nn.Sequential(
             OneHotLayer(num_classes=n_states),
-            nn.Linear(n_states, self.hidden_units),
-            nn.Tanh(),
-            nn.Linear(self.hidden_units, 1),
+            # nn.Linear(n_states, self.hidden_units),
+            # nn.Tanh(),
+            nn.Linear(n_states, 1),
         ).to(self.device)
         self.value_module = ValueOperator(
             self.value_net, in_keys=["state"], out_keys=["state_value"]
@@ -125,12 +126,13 @@ class BaseAgent:
                 loss = (
                     loss_td["loss_objective"]
                     + loss_td["loss_critic"]
-                    # + loss_td["loss_entropy"]
+                    + (0 if not self.use_entropy else loss_td["loss_entropy"])
                 )
                 losses_objective.append(loss_td["loss_objective"].mean().item())
                 losses_critic.append(loss_td["loss_critic"].mean().item())
-                # losses_entropy.append(loss_td["loss_entropy"].mean().item())
-                losses_entropy.append(0)
+                losses_entropy.append(
+                    0 if not self.use_entropy else loss_td["loss_entropy"].mean().item()
+                )
                 loss.backward()
                 grad_norm = nn.utils.clip_grad_norm_(
                     self.loss_module.parameters(), self.max_grad_norm
