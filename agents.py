@@ -1,4 +1,5 @@
 import torch
+import tensordict
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -7,11 +8,13 @@ from torchrl.data.replay_buffers import LazyTensorStorage, SamplerWithoutReplace
 from torchrl.data import Categorical, Binary, UnboundedContinuous, ReplayBuffer
 from torchrl.objectives import ClipPPOLoss, A2CLoss, DDPGLoss
 from torchrl.objectives.value import GAE
+from torchrl.modules import IndependentNormal
 
 from utils import OneHotLayer
 
 from tensordict import TensorDict
 from tensordict.nn import TensorDictModule
+from tensordict.nn.distributions import NormalParamExtractor
 
 
 class BaseAgent:
@@ -233,7 +236,19 @@ def fast_policy(td):
 
 
 class MetaAgent:
-    def __init__(self, state_spec, action_spec, device, max_grad_norm, lr):
+    def __init__(
+        self,
+        state_spec,
+        action_spec,
+        device,
+        max_grad_norm,
+        lr,
+        hidden_units,
+        clip_epsilon,
+        use_entropy,
+        gamma,
+        lmbda,
+    ):
         # We expect state_spec to be UnboundedContinuous and action_spec to be Binary
         assert isinstance(state_spec["state"], UnboundedContinuous)
         assert isinstance(action_spec, Binary)
@@ -242,7 +257,11 @@ class MetaAgent:
         self.device = device
         self.max_grad_norm = max_grad_norm
         self.lr = lr
-        self.hidden_units = 16
+        self.hidden_units = hidden_units
+        self.clip_epsilon = clip_epsilon
+        self.use_entropy = use_entropy
+        self.gamma = gamma
+        self.lmbda = lmbda
 
         self.reset()
 
@@ -252,8 +271,8 @@ class MetaAgent:
         self.loss_module = ClipPPOLoss(
             actor_network=self.policy,
             critic_network=self.value_module,
-            clip_epsilon=0.2,
-            entropy_bonus=False,
+            clip_epsilon=self.clip_epsilon,
+            entropy_bonus=self.use_entropy,
         )
         self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
 
@@ -261,15 +280,20 @@ class MetaAgent:
         self.actor_net = nn.Sequential(
             nn.Linear(self.state_spec["state"].shape[-1], self.hidden_units),
             nn.Tanh(),
-            nn.Linear(self.hidden_units, 1),
-            nn.Sigmoid(),  # Interpret action as probability to set constraint
+            nn.Linear(self.hidden_units, 2),
+            NormalParamExtractor(),
         ).to(self.device)
-        policy = TensorDictModule(self.actor_net, in_keys=["state"], out_keys=["probs"])
+        policy = TensorDictModule(
+            self.actor_net, in_keys=["state"], out_keys=["loc", "scale"]
+        )
         self.policy = ProbabilisticActor(
             module=policy,
             spec=self.action_spec,
-            in_keys=["probs"],
-            distribution_class=torch.distributions.Bernoulli,
+            in_keys=["loc", "scale"],
+            # distribution_class=tensordict.nn.distributions.Delta,
+            # distribution_class=torch.distributions.normal.Normal,
+            distribution_class=IndependentNormal,
+            # default_interaction_type="InteractionType.MODE",
             return_log_prob=True,
         )
 
@@ -283,8 +307,8 @@ class MetaAgent:
             self.value_net, in_keys=["state"], out_keys=["state_value"]
         )
         self.advantage_module = GAE(
-            gamma=0.98,
-            lmbda=0.96,
+            gamma=self.gamma,
+            lmbda=self.lmbda,
             value_network=self.value_module,
         )
 
@@ -292,11 +316,16 @@ class MetaAgent:
         # Since td will only contain a single sample, we don't bother with several updates
         self.advantage_module(td)
         # Detach sample_log_prob??? TODO
-        td["sample_log_prob"] = td["sample_log_prob"].detach()
+        # td["sample_log_prob"] = td["sample_log_prob"].detach()
 
         self.optim.zero_grad()
+        # print(f"{td=}")
         loss_td = self.loss_module(td)
-        loss = loss_td["loss_objective"] + loss_td["loss_critic"]
+        loss = (
+            loss_td["loss_objective"]
+            + loss_td["loss_critic"]
+            + (0 if not self.use_entropy else loss_td["loss_entropy"])
+        )
         loss.backward()
         grad_norm = nn.utils.clip_grad_norm_(
             self.loss_module.parameters(), self.max_grad_norm

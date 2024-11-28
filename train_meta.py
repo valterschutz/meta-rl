@@ -18,7 +18,21 @@ import wandb
 from agents import MetaAgent
 from base import get_base_from_config
 from env import MetaEnv
-from utils import log, DictWrapper
+from utils import DictWrapper
+
+
+def log(pbar, meta_td, episode, step):
+    # TODO
+    pbar.update(meta_td.numel())
+    wandb.log(
+        {
+            f"episode-{episode}/step": step,
+            f"episode-{episode}/meta state 1": meta_td["state"][0].item(),
+            f"episode-{episode}/meta state 2": meta_td["state"][1].item(),
+            f"episode-{episode}/meta action": meta_td["action"].item(),
+        }
+    )
+
 
 device = "cpu"
 
@@ -46,6 +60,11 @@ meta_agent = MetaAgent(
     device=device,
     max_grad_norm=meta_config["max_grad_norm"],
     lr=meta_config["lr"],
+    hidden_units=meta_config["hidden_units"],
+    clip_epsilon=meta_config["clip_epsilon"],
+    use_entropy=meta_config["use_entropy"],
+    gamma=meta_config["gamma"],
+    lmbda=meta_config["lmbda"],
 )
 
 wandb.login()
@@ -58,17 +77,20 @@ wandb.init(
     },
 )
 
-pbar = tqdm(total=meta_config["steps_per_episode"] * meta_config["episodes"])
+meta_steps = base_config["total_frames"] // base_config["batch_size"]
+pbar = tqdm(total=meta_steps * meta_config["episodes"])  # Counts number of meta steps
 
-for i in range(meta_config.episodes):
+for i in range(meta_config["episodes"]):
     meta_td = meta_env.reset()  # Resets base agent in meta environment
-    for j in range(meta_steps_per_episode):
+    for j in range(meta_steps):
+        # print(f"td before applying meta action: {meta_td}")
         meta_td = meta_agent.policy(meta_td)
+        # print(f"td after applying meta action: {meta_td}")
+        # fail
         meta_td = meta_env.step(meta_td)
         meta_agent.process_batch(meta_td.unsqueeze(0))
-        # Update logs, including a base agent evaluation
-        with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
-            assert not base_env.constraints_enabled  # TODO: remove
-            base_eval_td = base_env.rollout(100, base_agent.policy)
-        log(pbar, meta_td.detach().cpu(), base_eval_td.cpu(), episode=i, step=j)
+        # with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
+        #     assert not base_env.constraints_enabled  # TODO: remove
+        #     base_eval_td = base_env.rollout(100, base_agent.policy)
+        log(pbar, meta_td.detach().cpu(), episode=i, step=j)
         meta_td = step_mdp(meta_td)

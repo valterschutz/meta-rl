@@ -324,13 +324,13 @@ class MetaEnv(EnvBase):
         # One meta step equals processing one batch of base agent data
 
         # Apply meta action, which will affect self.base_iter
-        # self.base_env.set_constraint_state(td["action"].item()) # TODO: uncomment once base agent loss converges
+        self.base_env.set_constraint_weight(td["action"].item())
 
         # Get next base batch and update base agent
         base_td = next(self.base_iter)
         base_agent_losses, base_agent_grad_norm = self.base_agent.process_batch(base_td)
 
-        # Next meta state is the mean and std of the base rewards, next meta reward is the sum of the base rewards
+        # Next meta state is the mean and std of the base rewards, next meta reward is the mean base reward
         meta_td = TensorDict(
             {
                 "state": self._meta_state_from_base_td(base_td),
@@ -373,4 +373,4 @@ class MetaEnv(EnvBase):
     @staticmethod
     def _meta_reward_from_base_td(base_td):
         # Note the use of .detach() to avoid backpropagating through the base agent
-        return base_td["next", "reward"].sum().detach()
+        return base_td["next", "reward"].mean().detach()
