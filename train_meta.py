@@ -1,5 +1,5 @@
 # TODO:
-# - [ ] Make sure that base agent loss converges in each meta episode before applying meta actions
+# - [X] Make sure that base agent loss converges in each meta episode before applying meta actions
 
 from tqdm import tqdm
 from datetime import datetime
@@ -19,34 +19,30 @@ from env import get_base_env, MetaEnv
 from agents import BaseAgent, MetaAgent
 from utils import log
 
+return_x = 0.2  # Optimal return using slow path
+return_y = 0.1  # Return for using fast path
+big_reward = 10.0
+n_states = 20
+gamma = 0.9
+rollout_timeout = 10 * n_states
 meta_episodes = 2
 meta_steps_per_episode = 100  # TODO: 10 should be enough
 device = torch.device("cpu")
-n_actions = 4
-
-optimal_return = 0.1
-gap = 0.1
-big_reward = 10.0
-n_pos = 10  # TODO: should be 20?
-
-# (n_pos-1)*x + big_reward = optimal_return
-x = (optimal_return - big_reward) / (n_pos - 1)
-# (n_pos-1)/2*y + big_reward = optimal_return - gap
-y = (optimal_return - gap - big_reward) / ((n_pos - 1) / 2)
+gamma = 0.9
 
 # Base env
 base_env = get_base_env(
-    left_reward=x,
-    right_reward=x,
-    down_reward=y,
-    up_reward=y,
+    left_reward=0,
+    right_reward=0,
+    down_reward=0,
+    up_reward=0,
     n_pos=n_pos,
     big_reward=big_reward,
     random_start=False,
     punishment=0.0,
     seed=None,
     device="cpu",
-    constraints_enabled=False,
+    constraints_enabled=True,
 ).to(device)
 check_env_specs(base_env)
 
@@ -55,16 +51,18 @@ base_agent = BaseAgent(
     state_spec=base_env.state_spec,
     action_spec=base_env.action_spec,
     num_optim_epochs=10,
-    buffer_size=100,
+    buffer_size=20,
     sub_batch_size=20,
     device="cpu",
     max_grad_norm=1,
-    lr=1e-2,  # TODO: should be 1e-1?
+    lr=1e-2,
+    gamma=gamma,
+    lmbda=0.5,
 )
 
 # Meta env
 meta_env = MetaEnv(
-    base_env=base_env, base_agent=base_agent, total_frames=1000, device="cpu"
+    base_env=base_env, base_agent=base_agent, total_frames=1_000, device=device
 )
 check_env_specs(meta_env)
 
@@ -72,9 +70,9 @@ check_env_specs(meta_env)
 meta_agent = MetaAgent(
     state_spec=meta_env.state_spec,
     action_spec=meta_env.action_spec,
-    device="cpu",
+    device=device,
     max_grad_norm=1,
-    lr=1e-1,
+    lr=1e-2,
 )
 
 wandb.login()
@@ -83,22 +81,7 @@ wandb.init(
     name=f"meta_toy|{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
     config={
         "base_agent.buffer_size": base_agent.buffer_size,
-        "base_agent.sub_batch_size": base_agent.sub_batch_size,
-        # "meta_collector.total_frames": total_frames,
-        # "base num_optim_epochs": base_agent.num_optim_epochs,
-        # "gamma": gamma,
-        # "n_actions": n_actions,
-        # "base_agent.max_grad_norm": base_agent.max_grad_norm,
-        # "base_agent.lr": base_agent.lr,
-        # "meta_agent.max_grad_norm": meta_agent.max_grad_norm,
-        # "meta_agent.lr": meta_agent.lr,
-        "left_reward": base_env.left_reward,
-        "right_reward": base_env.right_reward,
-        "down_reward": base_env.down_reward,
-        "up_reward": base_env.up_reward,
-        "n_pos": base_env.n_pos,
-        "big_reward": base_env.big_reward,
-        "punishment": base_env.punishment,
+        "n_states": n_states,
     },
 )
 

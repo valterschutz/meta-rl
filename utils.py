@@ -81,3 +81,14 @@ def calc_return(td, gamma):
     for i in range(len(td)):
         G += td["next", "reward"][i].item() * gamma**i
     return G
+
+
+class DictWrapper:
+    def __init__(self, dict):
+        # Set attributes from the dictionary
+        for key, value in dict.items():
+            setattr(self, key, value)
+
+    def to_dict(self):
+        # Optionally, provide a method to convert back to a dictionary
+        return self.__dict__
