@@ -25,6 +25,8 @@ class BaseAgent:
         device,
         max_grad_norm,
         lr,
+        gamma,
+        lmbda,
     ):
         # We expect state_spec and action_spec to both be catogorical
         assert isinstance(state_spec["state"], Categorical)
@@ -40,6 +42,8 @@ class BaseAgent:
         self.max_grad_norm = max_grad_norm
         self.lr = lr
         self.hidden_units = 4
+        self.gamma = gamma
+        self.lmbda = lmbda
 
         self.replay_buffer = ReplayBuffer(
             storage=LazyTensorStorage(max_size=self.buffer_size, device=self.device),
@@ -55,7 +59,7 @@ class BaseAgent:
             actor_network=self.policy,
             critic_network=self.value_module,
             clip_epsilon=0.2,
-            entropy_bonus=False,
+            # entropy_bonus=True,
         )
         # self.loss_module = DDPGLoss(
         #     actor_network=self.policy,
@@ -98,8 +102,8 @@ class BaseAgent:
             self.value_net, in_keys=["state"], out_keys=["state_value"]
         )
         self.advantage_module = GAE(
-            gamma=1,
-            lmbda=0.5,
+            gamma=self.gamma,
+            lmbda=self.lmbda,
             value_network=self.value_module,
         )
 

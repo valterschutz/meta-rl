@@ -26,7 +26,7 @@ n_actions = 4
 return_x = 0.2  # Optimal return using slow path
 return_y = 0.1  # Return for using fast path
 big_reward = 10.0
-n_states = 30
+n_states = 20
 gamma = 0.99
 
 # Assuming n_pos is even, calculate x and y

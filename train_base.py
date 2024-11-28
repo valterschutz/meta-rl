@@ -15,6 +15,7 @@ from torchrl.collectors import SyncDataCollector
 
 import torch
 import wandb
+import numpy as np
 
 from env import BaseEnv
 from agents import BaseAgent, slow_policy, fast_policy, ValueIterationAgent
@@ -23,18 +24,23 @@ from utils import log, print_base_rollout, calc_return
 device = torch.device("cpu")
 n_actions = 4
 
-init_constraints = False  # Whether to start with constraints enabled
-constraints_when = 0.3  # Whether to enable constraints at some fraction of the way
+# init_constraints = False  # Whether to start with constraints enabled
+# constraints_when = 0.3  # Whether to enable constraints at some fraction of the way
 
 return_x = 0.2  # Optimal return using slow path
 return_y = 0.1  # Return for using fast path
 big_reward = 10.0
-n_states = 30
-gamma = 0.99
+n_states = 20
+gamma = 0.9
 rollout_timeout = 10 * n_states
+no_weight_fraction = 0.48  # How far into the training should the constraints be off
+full_weight_fraction = (
+    0.52  # How far into the training should the constraints be fully active
+)
 
 # Assuming n_pos is even, calculate x and y
 x, y = BaseEnv.calculate_xy(n_states, return_x, return_y, big_reward, gamma)
+print(f"x: {x}, y: {y}")
 
 # Base env
 env = BaseEnv.get_base_env(
@@ -48,33 +54,38 @@ env = BaseEnv.get_base_env(
     punishment=0,
     seed=None,
     device="cpu",
-    constraints_enabled=False,
+    constraints_enabled=True,
 ).to(device)
 check_env_specs(env)
-env.set_constraint_state(init_constraints)
+# env.set_constraint_weight(0.33)
+# env.set_constraint_state()
 
 
 # A couple of baseline agents
 value_agent = ValueIterationAgent(env, gamma=gamma)
 value_agent.update_values()
+# print(f"Q-values: {value_agent.Q}")
+# fail
 # also slow_policy and fast_policy
 
 agent = BaseAgent(
     state_spec=env.state_spec,
     action_spec=env.action_spec,
     num_optim_epochs=10,
-    buffer_size=100,
-    sub_batch_size=100,
+    buffer_size=20,
+    sub_batch_size=20,
     device=device,
     max_grad_norm=1,
     lr=1e-2,
+    gamma=gamma,
+    lmbda=0.5,
 )
 
 collector = SyncDataCollector(
     env,
     agent.policy,
     frames_per_batch=agent.buffer_size,
-    total_frames=10_000,
+    total_frames=1_000,
     split_trajs=False,
     device="cpu",
 )
@@ -96,8 +107,9 @@ wandb.init(
         "n_states": env.n_states,
         "big_reward": env.big_reward,
         "punishment": env.punishment,
-        "init_constraints": init_constraints,
-        "constraints_when": constraints_when,
+        "full_weight_fraction": full_weight_fraction,
+        # "init_constraints": init_constraints,
+        # "constraints_when": constraints_when,
         "lr": agent.lr,
         "num_optim_epochs": agent.num_optim_epochs,
     },
@@ -108,9 +120,16 @@ pbar = tqdm(total=collector.total_frames)
 
 n_batches = collector.total_frames // collector.frames_per_batch
 for i, td in enumerate(collector):
-    if constraints_when is not None and i / n_batches >= constraints_when:
-        env.set_constraint_state(True)
-        value_agent.update_values()
+    # constraint_weight = np.clip(
+    #     (i - no_weight_fraction * n_batches)
+    #     / ((full_weight_fraction - no_weight_fraction) * n_batches),
+    #     0,
+    #     1,
+    # ).item()
+    constraint_weight = 1
+    env.set_constraint_weight(constraint_weight)
+    value_agent.update_values()
+
     losses, max_grad_norm = agent.process_batch(td)
 
     with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
@@ -132,6 +151,8 @@ for i, td in enumerate(collector):
     optimal_return = calc_return(optimal_td, gamma)
     wandb.log(
         {
+            "constraint_weight": constraint_weight,
+            # "constraint_weight": 1,
             "train state distribution": wandb.Histogram(td["state"]),
             "train reward distribution": wandb.Histogram(td["next", "reward"]),
             "loss_objective": losses["loss_objective"].item(),

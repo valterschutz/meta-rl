@@ -104,6 +104,10 @@ class BaseEnv(EnvBase):
         seed=None,
         device="cpu",
         constraints_enabled=False,
+        left_weight=1.0,
+        right_weight=1.0,
+        down_weight=1.0,
+        up_weight=1.0,
     ):
         super().__init__(device=device, batch_size=[])
 
@@ -117,6 +121,10 @@ class BaseEnv(EnvBase):
         self.random_start = random_start
         self.punishment = punishment
         self.constraints_enabled = constraints_enabled
+        self.left_weight = left_weight
+        self.right_weight = right_weight
+        self.down_weight = down_weight
+        self.up_weight = up_weight
 
         self._make_spec()
         if seed is None:
@@ -184,13 +192,21 @@ class BaseEnv(EnvBase):
         if self.constraints_enabled:
             # print(f"Constraints enabled")
             # Left action
-            reward = torch.where(action == 0, self.left_reward, reward)
+            reward = torch.where(
+                action == 0, self.left_weight * self.left_reward, reward
+            )
             # Right action
-            reward = torch.where(action == 1, self.right_reward, reward)
+            reward = torch.where(
+                action == 1, self.right_weight * self.right_reward, reward
+            )
             # Down action
-            reward = torch.where(mask_even & (action == 2), self.down_reward, reward)
+            reward = torch.where(
+                mask_even & (action == 2), self.down_weight * self.down_reward, reward
+            )
             # Up action
-            reward = torch.where(mask_even & (action == 3), self.up_reward, reward)
+            reward = torch.where(
+                mask_even & (action == 3), self.up_weight * self.up_reward, reward
+            )
         # else:
         # print(f"Constraints disabled")
 
@@ -241,6 +257,24 @@ class BaseEnv(EnvBase):
         env = TransformedEnv(env, Compose(StepCounter()))
         check_env_specs(env)
         return env
+
+    def set_left_weight(self, left_weight):
+        self.left_weight = left_weight
+
+    def set_right_weight(self, right_weight):
+        self.right_weight = right_weight
+
+    def set_down_weight(self, down_weight):
+        self.down_weight = down_weight
+
+    def set_up_weight(self, up_weight):
+        self.up_weight = up_weight
+
+    def set_constraint_weight(self, weight):
+        self.set_left_weight(weight)
+        self.set_right_weight(weight)
+        self.set_down_weight(weight)
+        self.set_up_weight(weight)
 
 
 class MetaEnv(EnvBase):
