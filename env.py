@@ -1,4 +1,5 @@
 from typing import Optional
+from itertools import tee
 
 import torch
 import tqdm
@@ -20,6 +21,8 @@ from torchrl.envs import (
 from collections import defaultdict
 from tqdm import tqdm
 from datetime import datetime
+
+from more_itertools import peekable
 
 from torchrl.envs.utils import (
     check_env_specs,
@@ -292,8 +295,17 @@ class MetaEnv(EnvBase):
         self.set_seed(seed)
 
     def _reset(self, td):
+        # print(f"Resetting meta env")
         # Reset the base agent and return the initial state for the meta agent
         self.base_agent.reset()
+        # Reset the base collector
+        # print(f"Lenght of base iterator before reset: {len(self.base_iter)}")
+        self.base_collector.reset()  # TODO: Does this do anything?
+        self.base_iter = iter(self.base_collector)
+        # base_iter = iter(self.base_collector)
+        # self.base_iter, self.peek_iter = tee(base_iter)
+        # print(f"Lenght of base iterator after reset: {len(self.base_iter)}")
+        # next(self.peek_iter)  # Assume at least one batch is possible
 
         return TensorDict(
             {
@@ -327,19 +339,54 @@ class MetaEnv(EnvBase):
         self.base_env.set_constraint_weight(td["action"].item())
 
         # Get next base batch and update base agent
-        base_td = next(self.base_iter)
-        base_agent_losses, base_agent_grad_norm = self.base_agent.process_batch(base_td)
+        try:
+            # print("Before next")
+            base_td = next(self.base_iter)
+            # print("After next")
+            state = self._meta_state_from_base_td(base_td)
+            reward = self._meta_reward_from_base_td(base_td)
+            base_agent_losses, base_agent_grad_norm = self.base_agent.process_batch(
+                base_td
+            )
+            done = False
+            self.prev_base_td = base_td
+        except StopIteration:
+            # print("StopIteration reached")
+            # Use the last base batch as the state, with 0 reward and done=True
+            state = self._meta_state_from_base_td(self.prev_base_td)
+            # print(f"placeholder")
+            reward = 0.0  # Always 0 reward in the terminal state
+            # No losses in the terminal state
+            base_agent_losses = TensorDict(
+                {
+                    "loss_objective": torch.tensor(
+                        0.0, device=self.device, dtype=torch.float32
+                    ),
+                    "loss_critic": torch.tensor(
+                        0.0, device=self.device, dtype=torch.float32
+                    ),
+                    "loss_entropy": torch.tensor(
+                        0.0, device=self.device, dtype=torch.float32
+                    ),
+                }
+            )
+            base_agent_grad_norm = 0.0
+            done = True
+            # print("End of stopiteration reached")
 
         # Next meta state is the mean and std of the base rewards, next meta reward is the mean base reward
         meta_td = TensorDict(
             {
-                "state": self._meta_state_from_base_td(base_td),
-                "reward": self._meta_reward_from_base_td(base_td),
+                "state": state,
+                "reward": reward,
                 "base_agent_losses": base_agent_losses,
                 "base_agent_grad_norm": base_agent_grad_norm,
+                "done": done,
             },
             batch_size=(),
         )
+
+        # print("Reached end of _step")
 
         return meta_td
 

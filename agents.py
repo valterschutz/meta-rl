@@ -3,6 +3,8 @@ import tensordict
 import torch.nn as nn
 import torch.nn.functional as F
 
+from abs import ABC, abstractmethod
+
 from torchrl.modules.tensordict_module import ProbabilisticActor, ValueOperator
 from torchrl.data.replay_buffers import LazyTensorStorage, SamplerWithoutReplacement
 from torchrl.data import Categorical, Binary, UnboundedContinuous, ReplayBuffer
@@ -131,6 +133,7 @@ class BaseAgent:
                     + loss_td["loss_critic"]
                     + (0 if not self.use_entropy else loss_td["loss_entropy"])
                 )
+                # print(f"{loss.requires_grad=}")
                 losses_objective.append(loss_td["loss_objective"].mean().item())
                 losses_critic.append(loss_td["loss_critic"].mean().item())
                 losses_entropy.append(
@@ -315,8 +318,9 @@ class MetaAgent:
     def process_batch(self, td):
         # Since td will only contain a single sample, we don't bother with several updates
         self.advantage_module(td)
-        # Detach sample_log_prob??? TODO
-        # td["sample_log_prob"] = td["sample_log_prob"].detach()
+        # Detach stuff??? TODO
+        td["sample_log_prob"] = td["sample_log_prob"].detach()
+        td["action"] = td["action"].detach()
 
         self.optim.zero_grad()
         # print(f"{td=}")
@@ -331,6 +335,8 @@ class MetaAgent:
             self.loss_module.parameters(), self.max_grad_norm
         )
         self.optim.step()
+
+        return loss
 
     # def act(self, td):
     #     # Update actions which will affect next base agent batch
