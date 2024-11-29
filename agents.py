@@ -3,7 +3,7 @@ import tensordict
 import torch.nn as nn
 import torch.nn.functional as F
 
-from abs import ABC, abstractmethod
+from abc import ABC, abstractmethod
 
 from torchrl.modules.tensordict_module import ProbabilisticActor, ValueOperator
 from torchrl.data.replay_buffers import LazyTensorStorage, SamplerWithoutReplacement
@@ -19,7 +19,7 @@ from tensordict.nn import TensorDictModule
 from tensordict.nn.distributions import NormalParamExtractor
 
 
-class BaseAgent:
+class PPOAgent(ABC):
     def __init__(
         self,
         state_spec,
@@ -32,13 +32,9 @@ class BaseAgent:
         lr,
         gamma,
         lmbda,
-        # hidden_units,
         clip_epsilon,
         use_entropy,
     ):
-        # We expect state_spec and action_spec to both be catogorical
-        assert isinstance(state_spec["state"], Categorical)
-        assert isinstance(action_spec, Categorical)
 
         self.state_spec = state_spec
         self.action_spec = action_spec
@@ -51,7 +47,7 @@ class BaseAgent:
         self.lr = lr
         self.gamma = gamma
         self.lmbda = lmbda
-        # self.hidden_units = hidden_units
+
         self.clip_epsilon = clip_epsilon
         self.use_entropy = use_entropy
 
@@ -61,6 +57,14 @@ class BaseAgent:
         )
 
         self.reset()
+
+    @abstractmethod
+    def initialize_policy(self):
+        pass
+
+    @abstractmethod
+    def initialize_critic(self):
+        pass
 
     def reset(self):
         self.initialize_policy()
@@ -74,55 +78,16 @@ class BaseAgent:
         self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
         self.replay_buffer.empty()
 
-    def initialize_policy(self):
-        n_states = self.state_spec["state"].n
-        n_actions = self.action_spec.n
-
-        self.actor_net = nn.Sequential(
-            OneHotLayer(num_classes=n_states),
-            # nn.Linear(n_states, self.hidden_units),
-            # nn.Tanh(),
-            nn.Linear(n_states, n_actions),
-        ).to(self.device)
-        self.policy = TensorDictModule(
-            self.actor_net, in_keys=["state"], out_keys=["logits"]
-        )
-        self.policy = ProbabilisticActor(
-            module=self.policy,
-            spec=self.action_spec,
-            in_keys=["logits"],
-            distribution_class=torch.distributions.Categorical,
-            return_log_prob=True,
-        )
-
-    def initialize_critic(self):
-        n_states = self.state_spec["state"].n
-
-        self.value_net = nn.Sequential(
-            OneHotLayer(num_classes=n_states),
-            # nn.Linear(n_states, self.hidden_units),
-            # nn.Tanh(),
-            nn.Linear(n_states, 1),
-        ).to(self.device)
-        self.value_module = ValueOperator(
-            self.value_net, in_keys=["state"], out_keys=["state_value"]
-        )
-        self.advantage_module = GAE(
-            gamma=self.gamma,
-            lmbda=self.lmbda,
-            value_network=self.value_module,
-        )
-
-    def process_batch(self, base_td):
+    def process_batch(self, td):
         # Process a single batch of data and return losses and maximum grad norm
-        times_to_sample = len(base_td) // self.sub_batch_size
+        times_to_sample = len(td) // self.sub_batch_size
         max_grad_norm = 0
         losses_objective = []
         losses_critic = []
         losses_entropy = []
         for i in range(self.num_optim_epochs):
-            self.advantage_module(base_td)
-            self.replay_buffer.extend(base_td)
+            self.advantage_module(td)
+            self.replay_buffer.extend(td)
             for j in range(times_to_sample):
                 sub_base_td = self.replay_buffer.sample(self.sub_batch_size)
 
@@ -166,6 +131,52 @@ class BaseAgent:
             batch_size=(),
         )
         return losses, max_grad_norm
+
+
+class BaseAgent(PPOAgent):
+    def __init__(
+        self,
+        **kwargs,
+    ):
+        # We expect state_spec and action_spec to both be catogorical
+        super().__init__(**kwargs)
+
+    def initialize_policy(self):
+        n_states = self.state_spec["state"].n
+        n_actions = self.action_spec.n
+
+        self.actor_net = nn.Sequential(
+            OneHotLayer(num_classes=n_states),
+            nn.Linear(n_states, n_actions),
+        ).to(self.device)
+        self.policy = TensorDictModule(
+            self.actor_net, in_keys=["state"], out_keys=["logits"]
+        )
+        self.policy = ProbabilisticActor(
+            module=self.policy,
+            spec=self.action_spec,
+            in_keys=["logits"],
+            distribution_class=torch.distributions.Categorical,
+            return_log_prob=True,
+        )
+
+    def initialize_critic(self):
+        n_states = self.state_spec["state"].n
+
+        self.value_net = nn.Sequential(
+            OneHotLayer(num_classes=n_states),
+            # nn.Linear(n_states, self.hidden_units),
+            # nn.Tanh(),
+            nn.Linear(n_states, 1),
+        ).to(self.device)
+        self.value_module = ValueOperator(
+            self.value_net, in_keys=["state"], out_keys=["state_value"]
+        )
+        self.advantage_module = GAE(
+            gamma=self.gamma,
+            lmbda=self.lmbda,
+            value_network=self.value_module,
+        )
 
 
 class ValueIterationAgent:
@@ -238,46 +249,10 @@ def fast_policy(td):
     return td
 
 
-class MetaAgent:
-    def __init__(
-        self,
-        state_spec,
-        action_spec,
-        device,
-        max_grad_norm,
-        lr,
-        hidden_units,
-        clip_epsilon,
-        use_entropy,
-        gamma,
-        lmbda,
-    ):
-        # We expect state_spec to be UnboundedContinuous and action_spec to be Binary
-        assert isinstance(state_spec["state"], UnboundedContinuous)
-        assert isinstance(action_spec, Binary)
-        self.state_spec = state_spec
-        self.action_spec = action_spec
-        self.device = device
-        self.max_grad_norm = max_grad_norm
-        self.lr = lr
+class MetaAgent(PPOAgent):
+    def __init__(self, hidden_units, **kwargs):
+        super().__init__(**kwargs)
         self.hidden_units = hidden_units
-        self.clip_epsilon = clip_epsilon
-        self.use_entropy = use_entropy
-        self.gamma = gamma
-        self.lmbda = lmbda
-
-        self.reset()
-
-    def reset(self):
-        self.initialize_policy()
-        self.initialize_critic()
-        self.loss_module = ClipPPOLoss(
-            actor_network=self.policy,
-            critic_network=self.value_module,
-            clip_epsilon=self.clip_epsilon,
-            entropy_bonus=self.use_entropy,
-        )
-        self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
 
     def initialize_policy(self):
         self.actor_net = nn.Sequential(
@@ -293,8 +268,6 @@ class MetaAgent:
             module=policy,
             spec=self.action_spec,
             in_keys=["loc", "scale"],
-            # distribution_class=tensordict.nn.distributions.Delta,
-            # distribution_class=torch.distributions.normal.Normal,
             distribution_class=IndependentNormal,
             # default_interaction_type="InteractionType.MODE",
             return_log_prob=True,
@@ -314,35 +287,3 @@ class MetaAgent:
             lmbda=self.lmbda,
             value_network=self.value_module,
         )
-
-    def process_batch(self, td):
-        # Since td will only contain a single sample, we don't bother with several updates
-        self.advantage_module(td)
-        # Detach stuff??? TODO
-        td["sample_log_prob"] = td["sample_log_prob"].detach()
-        td["action"] = td["action"].detach()
-
-        self.optim.zero_grad()
-        # print(f"{td=}")
-        loss_td = self.loss_module(td)
-        loss = (
-            loss_td["loss_objective"]
-            + loss_td["loss_critic"]
-            + (0 if not self.use_entropy else loss_td["loss_entropy"])
-        )
-        loss.backward()
-        grad_norm = nn.utils.clip_grad_norm_(
-            self.loss_module.parameters(), self.max_grad_norm
-        )
-        self.optim.step()
-
-        return loss
-
-    # def act(self, td):
-    #     # Update actions which will affect next base agent batch
-    #     td = self.policy(td)
-    #     # Apply meta action
-    #     action_prob = td["probs"]
-    #     action = torch.bernoulli(action_prob).bool().item()
-    #     td["action"] = action
-    #     return td
