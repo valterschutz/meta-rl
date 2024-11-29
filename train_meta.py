@@ -56,14 +56,17 @@ check_env_specs(meta_env)
 meta_agent = MetaAgent(
     state_spec=meta_env.state_spec,
     action_spec=meta_env.action_spec,
+    num_optim_epochs=1,
+    buffer_size=1,
+    sub_batch_size=1,
     device=meta_config["device"],
     max_grad_norm=meta_config["max_grad_norm"],
     lr=meta_config["lr"],
-    hidden_units=meta_config["hidden_units"],
-    clip_epsilon=meta_config["clip_epsilon"],
-    use_entropy=meta_config["use_entropy"],
     gamma=meta_config["gamma"],
     lmbda=meta_config["lmbda"],
+    clip_epsilon=meta_config["clip_epsilon"],
+    use_entropy=meta_config["use_entropy"],
+    hidden_units=meta_config["hidden_units"],
 )
 
 # Try to do a rollout
@@ -96,7 +99,7 @@ meta_collector = SyncDataCollector(
 )
 
 for meta_td in meta_collector:
-    meta_loss = meta_agent.process_batch(meta_td)
+    meta_losses, meta_max_grad_norm = meta_agent.process_batch(meta_td)
     meta_td = meta_td.squeeze(0)
     # log(pbar, meta_td, episode=0, step=0)
     wandb.log(

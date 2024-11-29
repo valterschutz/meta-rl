@@ -79,6 +79,9 @@ class PPOAgent(ABC):
         self.replay_buffer.empty()
 
     def process_batch(self, td):
+        # Detach sample_log_prob and action from the graph. TODO: understand why
+        td["sample_log_prob"] = td["sample_log_prob"].detach()
+        td["action"] = td["action"].detach()
         # Process a single batch of data and return losses and maximum grad norm
         times_to_sample = len(td) // self.sub_batch_size
         max_grad_norm = 0
@@ -251,8 +254,8 @@ def fast_policy(td):
 
 class MetaAgent(PPOAgent):
     def __init__(self, hidden_units, **kwargs):
-        super().__init__(**kwargs)
         self.hidden_units = hidden_units
+        super().__init__(**kwargs)
 
     def initialize_policy(self):
         self.actor_net = nn.Sequential(
