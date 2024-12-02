@@ -20,6 +20,7 @@ from agents import MetaAgent
 from base import get_base_from_config
 from env import MetaEnv
 from utils import DictWrapper
+import argparse
 
 
 def log(pbar, meta_td, episode, step):
@@ -35,9 +36,17 @@ def log(pbar, meta_td, episode, step):
     )
 
 
-with open(sys.argv[1], "r") as f:
+# parser = argparse.ArgumentParser()
+# parser.add_argument("base_config", type=str)
+# parser.add_argument("meta_config", type=str)
+# args = parser.parse_args()
+# with open(args.base_config, "r", encoding="UTF-8") as f:
+#     base_config = json.load(f)
+# with open(args.meta_config, "r", encoding="UTF-8") as f:
+#     meta_config = json.load(f)
+with open("base_config.json", "r", encoding="UTF-8") as f:
     base_config = json.load(f)
-with open(sys.argv[2], "r") as f:
+with open("meta_config.json", "r", encoding="UTF-8") as f:
     meta_config = json.load(f)
 
 base_env, base_agent, base_collector = get_base_from_config(DictWrapper(base_config))
@@ -70,21 +79,12 @@ meta_agent = MetaAgent(
 )
 
 # Try to do a rollout
-meta_td = meta_env.rollout(1000, meta_agent.policy)
-print(f"meta_td: {meta_td}")
-meta_agent.process_batch(meta_td)
-meta_td = meta_env.rollout(1000, meta_agent.policy)
+# meta_td = meta_env.rollout(1000, meta_agent.policy)
+# print(f"meta_td: {meta_td}")
+# meta_agent.process_batch(meta_td)
+# meta_td = meta_env.rollout(1000, meta_agent.policy)
 # fail
 
-wandb.login()
-wandb.init(
-    project="toy-meta-train",
-    name=f"toy-meta-train|{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
-    config={
-        **{f"meta-{k}": v for k, v in meta_config.items()},
-        **{f"base-{k}": v for k, v in base_config.items()},
-    },
-)
 
 meta_steps_per_episode = base_config["total_frames"] // base_config["batch_size"]
 meta_total_steps = meta_steps_per_episode * meta_config["episodes"]
@@ -95,7 +95,27 @@ meta_collector = SyncDataCollector(
     meta_agent.policy,
     frames_per_batch=1,
     total_frames=meta_total_steps,
+    split_trajs=False,
     device=meta_config["device"],
+)
+
+# Get some data from the meta_collector
+meta_iter = iter(meta_collector)
+meta_td = next(meta_iter)
+# print(f"meta_td: {meta_td}")
+# fail1
+# meta_td = next(meta_iter)
+# print(f"meta_td: {meta_td}")
+# fai2
+
+wandb.login()
+wandb.init(
+    project="toy-meta-train",
+    name=f"toy-meta-train|{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
+    config={
+        **{f"meta-{k}": v for k, v in meta_config.items()},
+        **{f"base-{k}": v for k, v in base_config.items()},
+    },
 )
 
 for meta_td in meta_collector:

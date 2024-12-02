@@ -345,6 +345,11 @@ class MetaEnv(EnvBase):
             # print("After next")
             state = self._meta_state_from_base_td(base_td)
             reward = self._meta_reward_from_base_td(base_td)
+            # Check if base_td has requires_grad
+            # if not base_td.requires_grad:
+            #     # Print each key and its requires_grad
+            #     for key in base_td.keys():
+            #         print(f"{key}: {base_td[key].requires_grad}")
             base_agent_losses, base_agent_grad_norm = self.base_agent.process_batch(
                 base_td
             )
@@ -410,14 +415,15 @@ class MetaEnv(EnvBase):
     @staticmethod
     def _meta_state_from_base_td(base_td):
         # Note the use of .detach() to avoid backpropagating through the base agent
+        # TODO: detach or not? requires_grad or not?
         return torch.tensor(
             [
-                base_td["next", "reward"].mean().detach(),
-                base_td["next", "reward"].std().detach(),
+                base_td["next", "reward"].mean(),
+                base_td["next", "reward"].std(),
             ]
         )
 
     @staticmethod
     def _meta_reward_from_base_td(base_td):
         # Note the use of .detach() to avoid backpropagating through the base agent
-        return base_td["next", "reward"].mean().detach()
+        return base_td["next", "reward"].mean()

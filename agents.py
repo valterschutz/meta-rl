@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from abc import ABC, abstractmethod
+from typing import Optional
 
 from torchrl.modules.tensordict_module import ProbabilisticActor, ValueOperator
 from torchrl.data.replay_buffers import LazyTensorStorage, SamplerWithoutReplacement
@@ -56,15 +57,20 @@ class PPOAgent(ABC):
             sampler=SamplerWithoutReplacement(),
         )
 
+        # Variables expected to be set by subclasses
+        # self.policy
+        # self.value_module
+        # self.advantage_module
+
         self.reset()
 
     @abstractmethod
     def initialize_policy(self):
-        pass
+        """Expected to set `self.policy`."""
 
     @abstractmethod
     def initialize_critic(self):
-        pass
+        """Expected to set `self.value_module` and `self.advantage_module`."""
 
     def reset(self):
         self.initialize_policy()
@@ -80,8 +86,10 @@ class PPOAgent(ABC):
 
     def process_batch(self, td):
         # Detach sample_log_prob and action from the graph. TODO: understand why
-        td["sample_log_prob"] = td["sample_log_prob"].detach()
-        td["action"] = td["action"].detach()
+        # td["sample_log_prob"] = td["sample_log_prob"].detach()
+        # td["action"] = td["action"].detach()
+        # td["sample_log_prob"] = td["sample_log_prob"].detach().requires_grad_()
+        # td["action"] = td["action"].detach().requires_grad_()
         # Process a single batch of data and return losses and maximum grad norm
         times_to_sample = len(td) // self.sub_batch_size
         max_grad_norm = 0
@@ -90,23 +98,42 @@ class PPOAgent(ABC):
         losses_entropy = []
         for i in range(self.num_optim_epochs):
             self.advantage_module(td)
-            self.replay_buffer.extend(td)
+            # print(f"Cannot extend with {td=}")
+            # Print the keys of td
+            # print(f"{td.keys()=}")
+            self.replay_buffer.extend(td.clone())
+            # fail
             for j in range(times_to_sample):
                 sub_base_td = self.replay_buffer.sample(self.sub_batch_size)
+                print(f"{sub_base_td.requires_grad=}")
+                for key in sub_base_td.keys():
+                    print(f"  {key}: {sub_base_td[key].requires_grad}")
+                # Check if policy parameters require grad
+                print(f"{self.policy.requires_grad_()=}")
+                # Check if value module parameters require grad
+                print(f"{self.value_module.requires_grad_()=}")
+                # Debug which keys of sub_base_td stop requiring grad
+                # for key, value in sub_base_td.items():
+                #     print(f"Key: {key}, requires_grad: {value.requires_grad}")
 
                 self.optim.zero_grad()
                 loss_td = self.loss_module(sub_base_td)
+                # Which keys in loss_td require grad?
+                print(f"{loss_td.requires_grad=}")
+                for key, value in loss_td.items():
+                    print(f"  {key}: {value.requires_grad}")
                 loss = (
                     loss_td["loss_objective"]
                     + loss_td["loss_critic"]
                     + (0 if not self.use_entropy else loss_td["loss_entropy"])
                 )
-                # print(f"{loss.requires_grad=}")
                 losses_objective.append(loss_td["loss_objective"].mean().item())
                 losses_critic.append(loss_td["loss_critic"].mean().item())
                 losses_entropy.append(
                     0 if not self.use_entropy else loss_td["loss_entropy"].mean().item()
                 )
+                # Check if loss requires grad
+                print(f"{loss.requires_grad=}")
                 loss.backward()
                 grad_norm = nn.utils.clip_grad_norm_(
                     self.loss_module.parameters(), self.max_grad_norm
