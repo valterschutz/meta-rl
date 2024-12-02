@@ -13,7 +13,7 @@ from torchrl.objectives import ClipPPOLoss, A2CLoss, DDPGLoss
 from torchrl.objectives.value import GAE
 from torchrl.modules import IndependentNormal
 
-from utils import OneHotLayer
+from utils import OneHotLayer, print_computational_graph
 
 from tensordict import TensorDict
 from tensordict.nn import TensorDictModule
@@ -66,17 +66,23 @@ class PPOAgent(ABC):
 
     @abstractmethod
     def initialize_policy(self):
-        """Expected to set `self.policy`."""
+        """Expected to return `self.actor_net` and `self.policy_module`."""
 
     @abstractmethod
     def initialize_critic(self):
-        """Expected to set `self.value_module` and `self.advantage_module`."""
+        """Expected to return `self.value_net`, `self.value_module` and `self.advantage_module`."""
+
+    @abstractmethod
+    def policy(self, td):
+        """Expected to fill the action key of the input tensor dictionary."""
 
     def reset(self):
-        self.initialize_policy()
-        self.initialize_critic()
+        self.actor_net, self.policy_module = self.initialize_policy()
+        self.value_net, self.value_module, self.advantage_module = (
+            self.initialize_critic()
+        )
         self.loss_module = ClipPPOLoss(
-            actor_network=self.policy,
+            actor_network=self.policy_module,
             critic_network=self.value_module,
             clip_epsilon=self.clip_epsilon,
             entropy_bonus=self.use_entropy,
@@ -86,10 +92,9 @@ class PPOAgent(ABC):
 
     def process_batch(self, td):
         # Detach sample_log_prob and action from the graph. TODO: understand why
-        # td["sample_log_prob"] = td["sample_log_prob"].detach()
-        # td["action"] = td["action"].detach()
-        # td["sample_log_prob"] = td["sample_log_prob"].detach().requires_grad_()
-        # td["action"] = td["action"].detach().requires_grad_()
+        td["sample_log_prob"] = td["sample_log_prob"].detach()
+        td["action"] = td["action"].detach()
+
         # Process a single batch of data and return losses and maximum grad norm
         times_to_sample = len(td) // self.sub_batch_size
         max_grad_norm = 0
@@ -105,23 +110,9 @@ class PPOAgent(ABC):
             # fail
             for j in range(times_to_sample):
                 sub_base_td = self.replay_buffer.sample(self.sub_batch_size)
-                print(f"{sub_base_td.requires_grad=}")
-                for key in sub_base_td.keys():
-                    print(f"  {key}: {sub_base_td[key].requires_grad}")
-                # Check if policy parameters require grad
-                print(f"{self.policy.requires_grad_()=}")
-                # Check if value module parameters require grad
-                print(f"{self.value_module.requires_grad_()=}")
-                # Debug which keys of sub_base_td stop requiring grad
-                # for key, value in sub_base_td.items():
-                #     print(f"Key: {key}, requires_grad: {value.requires_grad}")
 
                 self.optim.zero_grad()
                 loss_td = self.loss_module(sub_base_td)
-                # Which keys in loss_td require grad?
-                print(f"{loss_td.requires_grad=}")
-                for key, value in loss_td.items():
-                    print(f"  {key}: {value.requires_grad}")
                 loss = (
                     loss_td["loss_objective"]
                     + loss_td["loss_critic"]
@@ -132,8 +123,6 @@ class PPOAgent(ABC):
                 losses_entropy.append(
                     0 if not self.use_entropy else loss_td["loss_entropy"].mean().item()
                 )
-                # Check if loss requires grad
-                print(f"{loss.requires_grad=}")
                 loss.backward()
                 grad_norm = nn.utils.clip_grad_norm_(
                     self.loss_module.parameters(), self.max_grad_norm
@@ -175,38 +164,93 @@ class BaseAgent(PPOAgent):
         n_states = self.state_spec["state"].n
         n_actions = self.action_spec.n
 
-        self.actor_net = nn.Sequential(
+        actor_net = nn.Sequential(
             OneHotLayer(num_classes=n_states),
             nn.Linear(n_states, n_actions),
         ).to(self.device)
-        self.policy = TensorDictModule(
-            self.actor_net, in_keys=["state"], out_keys=["logits"]
-        )
-        self.policy = ProbabilisticActor(
-            module=self.policy,
+        policy = TensorDictModule(actor_net, in_keys=["state"], out_keys=["logits"])
+        policy = ProbabilisticActor(
+            module=policy,
             spec=self.action_spec,
             in_keys=["logits"],
             distribution_class=torch.distributions.Categorical,
             return_log_prob=True,
         )
 
+        return actor_net, policy
+
     def initialize_critic(self):
         n_states = self.state_spec["state"].n
 
-        self.value_net = nn.Sequential(
+        value_net = nn.Sequential(
             OneHotLayer(num_classes=n_states),
             # nn.Linear(n_states, self.hidden_units),
             # nn.Tanh(),
             nn.Linear(n_states, 1),
         ).to(self.device)
-        self.value_module = ValueOperator(
-            self.value_net, in_keys=["state"], out_keys=["state_value"]
+        value_module = ValueOperator(
+            value_net, in_keys=["state"], out_keys=["state_value"]
         )
-        self.advantage_module = GAE(
+        advantage_module = GAE(
             gamma=self.gamma,
             lmbda=self.lmbda,
-            value_network=self.value_module,
+            value_network=value_module,
         )
+
+        return value_net, value_module, advantage_module
+
+    def policy(self, td):
+        return self.policy_module(td)
+
+
+class MetaAgent(PPOAgent):
+    def __init__(self, hidden_units, **kwargs):
+        self.hidden_units = hidden_units
+        super().__init__(**kwargs)
+
+    def initialize_policy(self):
+        actor_net = nn.Sequential(
+            nn.Linear(self.state_spec["state"].shape[-1], self.hidden_units),
+            nn.Tanh(),
+            nn.Linear(self.hidden_units, 1),
+            nn.Sigmoid(),
+        ).to(self.device)
+        policy = TensorDictModule(
+            actor_net,
+            in_keys=["state"],
+            out_keys=["param"],
+        )
+        policy = ProbabilisticActor(
+            module=policy,
+            spec=self.action_spec,
+            in_keys=["param"],
+            return_log_prob=True,
+        )
+
+        return actor_net, policy
+
+    def initialize_critic(self):
+        value_net = nn.Sequential(
+            nn.Linear(self.state_spec["state"].shape[-1], self.hidden_units),
+            nn.Tanh(),
+            nn.Linear(self.hidden_units, 1),
+        ).to(self.device)
+        value_module = ValueOperator(
+            value_net, in_keys=["state"], out_keys=["state_value"]
+        )
+        advantage_module = GAE(
+            gamma=self.gamma,
+            lmbda=self.lmbda,
+            value_network=value_module,
+        )
+
+        return value_net, value_module, advantage_module
+
+    def policy(self, td):
+        # Policy is deterministic
+        # td["action"] = 0
+        # return td
+        return self.policy_module(td)
 
 
 class ValueIterationAgent:
@@ -258,11 +302,6 @@ class ValueIterationAgent:
                     )
             # fail
 
-    def policy(self, td):
-        # Policy is deterministic
-        td["action"] = self.Q[td["state"].long(), :].argmax(dim=-1)
-        return td
-
 
 def slow_policy(td):
     # Always go right
@@ -277,43 +316,3 @@ def fast_policy(td):
     else:
         td["action"] = torch.tensor(1, device=td.device)
     return td
-
-
-class MetaAgent(PPOAgent):
-    def __init__(self, hidden_units, **kwargs):
-        self.hidden_units = hidden_units
-        super().__init__(**kwargs)
-
-    def initialize_policy(self):
-        self.actor_net = nn.Sequential(
-            nn.Linear(self.state_spec["state"].shape[-1], self.hidden_units),
-            nn.Tanh(),
-            nn.Linear(self.hidden_units, 2),
-            NormalParamExtractor(),
-        ).to(self.device)
-        policy = TensorDictModule(
-            self.actor_net, in_keys=["state"], out_keys=["loc", "scale"]
-        )
-        self.policy = ProbabilisticActor(
-            module=policy,
-            spec=self.action_spec,
-            in_keys=["loc", "scale"],
-            distribution_class=IndependentNormal,
-            # default_interaction_type="InteractionType.MODE",
-            return_log_prob=True,
-        )
-
-    def initialize_critic(self):
-        self.value_net = nn.Sequential(
-            nn.Linear(self.state_spec["state"].shape[-1], self.hidden_units),
-            nn.Tanh(),
-            nn.Linear(self.hidden_units, 1),
-        ).to(self.device)
-        self.value_module = ValueOperator(
-            self.value_net, in_keys=["state"], out_keys=["state_value"]
-        )
-        self.advantage_module = GAE(
-            gamma=self.gamma,
-            lmbda=self.lmbda,
-            value_network=self.value_module,
-        )

@@ -281,13 +281,13 @@ class BaseEnv(EnvBase):
 
 
 class MetaEnv(EnvBase):
-    def __init__(self, base_env, base_agent, base_collector, device, seed=None):
+    def __init__(self, base_env, base_agent, base_collector_fn, device, seed=None):
         super().__init__(device=device, batch_size=[])
         self.base_env = base_env
         self.base_agent = base_agent
 
-        self.base_collector = base_collector
-        self.base_iter = iter(self.base_collector)
+        self.base_collector_fn = base_collector_fn
+        # self.base_iter = iter(self.base_collector)
 
         self._make_spec()
         if seed is None:
@@ -295,17 +295,11 @@ class MetaEnv(EnvBase):
         self.set_seed(seed)
 
     def _reset(self, td):
-        # print(f"Resetting meta env")
-        # Reset the base agent and return the initial state for the meta agent
         self.base_agent.reset()
         # Reset the base collector
-        # print(f"Lenght of base iterator before reset: {len(self.base_iter)}")
-        self.base_collector.reset()  # TODO: Does this do anything?
-        self.base_iter = iter(self.base_collector)
-        # base_iter = iter(self.base_collector)
-        # self.base_iter, self.peek_iter = tee(base_iter)
-        # print(f"Lenght of base iterator after reset: {len(self.base_iter)}")
-        # next(self.peek_iter)  # Assume at least one batch is possible
+        base_collector = self.base_collector_fn()
+
+        self.base_iter = iter(base_collector)
 
         return TensorDict(
             {
@@ -336,30 +330,22 @@ class MetaEnv(EnvBase):
         # One meta step equals processing one batch of base agent data
 
         # Apply meta action, which will affect self.base_iter
+        # print(f"td['action']: {td['action']}")
         self.base_env.set_constraint_weight(td["action"].item())
 
         # Get next base batch and update base agent
         try:
-            # print("Before next")
             base_td = next(self.base_iter)
-            # print("After next")
             state = self._meta_state_from_base_td(base_td)
             reward = self._meta_reward_from_base_td(base_td)
-            # Check if base_td has requires_grad
-            # if not base_td.requires_grad:
-            #     # Print each key and its requires_grad
-            #     for key in base_td.keys():
-            #         print(f"{key}: {base_td[key].requires_grad}")
             base_agent_losses, base_agent_grad_norm = self.base_agent.process_batch(
                 base_td
             )
             done = False
             self.prev_base_td = base_td
         except StopIteration:
-            # print("StopIteration reached")
             # Use the last base batch as the state, with 0 reward and done=True
             state = self._meta_state_from_base_td(self.prev_base_td)
-            # print(f"placeholder")
             reward = 0.0  # Always 0 reward in the terminal state
             # No losses in the terminal state
             base_agent_losses = TensorDict(
@@ -377,7 +363,6 @@ class MetaEnv(EnvBase):
             )
             base_agent_grad_norm = 0.0
             done = True
-            # print("End of stopiteration reached")
 
         # Next meta state is the mean and std of the base rewards, next meta reward is the mean base reward
         meta_td = TensorDict(
@@ -390,8 +375,6 @@ class MetaEnv(EnvBase):
             },
             batch_size=(),
         )
-
-        # print("Reached end of _step")
 
         return meta_td
 

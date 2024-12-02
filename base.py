@@ -54,7 +54,7 @@ def get_base_from_config(config):
         use_entropy=config.use_entropy,
     )
 
-    collector = SyncDataCollector(
+    collector_fn = lambda: SyncDataCollector(
         env,
         agent.policy,
         frames_per_batch=agent.buffer_size,
@@ -63,7 +63,7 @@ def get_base_from_config(config):
         device=config.device,
     )
 
-    return env, agent, collector
+    return env, agent, collector_fn
 
 
 def print_base_rollout(td, gamma):
