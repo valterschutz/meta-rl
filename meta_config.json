@@ -3,7 +3,7 @@
     "max_grad_norm": 1,
     "gamma": 0.98,
     "lmbda": 0.96,
-    "hidden_units": 16,
+    "hidden_units": 64,
     "clip_epsilon": 0.2,
     "use_entropy": false,
     "episodes": 10,

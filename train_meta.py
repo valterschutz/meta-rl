@@ -124,9 +124,10 @@ for i in range(meta_config["episodes"]):
         wandb.log(
             {
                 "step": j,
-                "meta state 1": meta_td["state"][0].item(),
-                "meta state 2": meta_td["state"][1].item(),
-                "meta action": meta_td["action"].item(),
+                "base_mean_reward": meta_td["base_mean_reward"].item(),
+                "base_std_reward": meta_td["base_std_reward"].item(),
+                "last_action": meta_td["last_action"].item(),
+                "action": meta_td["action"].item(),
                 "meta reward": meta_td["next", "reward"].item(),
                 "meta loss_objective": meta_losses["loss_objective"].item(),
                 "meta loss_critic": meta_losses["loss_critic"].item(),

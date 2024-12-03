@@ -303,11 +303,8 @@ class MetaEnv(EnvBase):
         # self.base_iter = iter(self.base_collector)
 
         # Calculate batch size, necessary to know size of observations for meta agent
-        # self.base_collector_fn = self.base_collector_fn()
         dummy_td = next(iter(self.base_collector_fn()))
-        # print(f"dummy_td: {dummy_td}")
         self.base_batch_size = dummy_td.batch_size.numel()
-        # print(f"base_batch_size: {self.base_batch_size}")
 
         self._make_spec()
         if seed is None:
@@ -319,11 +316,13 @@ class MetaEnv(EnvBase):
         # Reset the base collector
         base_collector = self.base_collector_fn()
 
-        self.base_iter = iter(base_collector)
+        self.base_iter = peekable(base_collector)
 
         return TensorDict(
             {
-                "state": torch.tensor([0.0, 0.0]),
+                "base_mean_reward": torch.tensor([0.0], dtype=torch.float32),
+                "base_std_reward": torch.tensor([0.0], dtype=torch.float32),
+                "last_action": torch.tensor([0], dtype=torch.float32),
                 "base": TensorDict(
                     {
                         "losses": TensorDict(
@@ -359,62 +358,46 @@ class MetaEnv(EnvBase):
         rng = torch.manual_seed(seed)
         self.rng = rng
 
-    def _step(self, td, verbose=False):
+    def _step(self, meta_td, verbose=False):
         """Takes one step in the meta environment, returning the next meta td and also the base td"""
 
         # Apply meta action, which will affect self.base_iter
-        self.base_env.set_constraint_weight(td["action"].item())
+        self.base_env.set_constraint_weight(meta_td["action"].item())
+
+        next_meta_td = TensorDict()
 
         # Get next base batch and update base agent
+        base_td = next(self.base_iter)
+        next_meta_td["base_mean_reward"] = base_td["next", "reward"].mean(0)
+        next_meta_td["base_std_reward"] = base_td["next", "reward"].std(0)
+        next_meta_td["last_action"] = meta_td["action"]
+        next_meta_td["reward"] = base_td["next", "true_reward"].mean(0)
+        base_losses, base_grad_norm = self.base_agent.process_batch(base_td)
+        next_meta_td["done"] = not self.is_batches_remaining(self.base_iter)
+
+        next_meta_td["base", "states"] = base_td["state"]
+        next_meta_td["base", "rewards"] = base_td["next", "reward"]
+        next_meta_td["base", "true_rewards"] = base_td["next", "true_reward"]
+        next_meta_td["base", "losses"] = base_losses
+        next_meta_td["base", "grad_norm"] = base_grad_norm
+
+        return next_meta_td
+
+    @staticmethod
+    def is_batches_remaining(peekable_iterator):
         try:
-            base_td = next(self.base_iter)
-            state = self._meta_state_from_base_td(base_td)
-            reward = self._meta_reward_from_base_td(base_td)
-            base_losses, base_grad_norm = self.base_agent.process_batch(base_td)
-            done = False
-            self.prev_base_td = base_td
+            peekable_iterator.peek()
+            return True
         except StopIteration:
-            # Use the last base batch as the state, with 0 reward and done=True
-            state = self._meta_state_from_base_td(self.prev_base_td)
-            reward = 0.0  # Always 0 reward in the terminal state
-            # No losses in the terminal state
-            base_losses = TensorDict(
-                {
-                    "loss_objective": torch.tensor(
-                        0.0, device=self.device, dtype=torch.float32
-                    ),
-                    "loss_critic": torch.tensor(
-                        0.0, device=self.device, dtype=torch.float32
-                    ),
-                    "loss_entropy": torch.tensor(
-                        0.0, device=self.device, dtype=torch.float32
-                    ),
-                }
-            )
-            base_grad_norm = 0.0
-            done = True
-
-        # Next meta state is the mean and std of the base rewards, next meta reward is the mean base reward
-        meta_td = TensorDict(
-            {
-                "state": state,
-                "reward": reward,
-                "done": done,
-            },
-            batch_size=(),
-        )
-
-        meta_td["base", "states"] = base_td["state"]
-        meta_td["base", "rewards"] = base_td["next", "reward"]
-        meta_td["base", "true_rewards"] = base_td["next", "true_reward"]
-        meta_td["base", "losses"] = base_losses
-        meta_td["base", "grad_norm"] = base_grad_norm
-
-        return meta_td
+            return False
 
     def _make_spec(self):
         self.observation_spec = Composite(
-            state=UnboundedContinuous(shape=(2,), dtype=torch.float32),
+            # The state
+            base_mean_reward=UnboundedContinuous(shape=(1,), dtype=torch.float32),
+            base_std_reward=UnboundedContinuous(shape=(1,), dtype=torch.float32),
+            last_action=Binary(shape=(1,), dtype=torch.float32),
+            # Base agent that we observe
             base=Composite(
                 losses=Composite(
                     loss_objective=UnboundedContinuous(shape=(), dtype=torch.float32),
@@ -439,24 +422,27 @@ class MetaEnv(EnvBase):
             shape=(),
         )
         self.state_spec = Composite(
-            state=UnboundedContinuous(shape=(2,), dtype=torch.float32),
+            base_mean_reward=UnboundedContinuous(shape=(1,), dtype=torch.float32),
+            base_std_reward=UnboundedContinuous(shape=(1,), dtype=torch.float32),
+            last_action=Binary(shape=(1,), dtype=torch.float32),
         )
-        self.action_spec = Binary(shape=(1,), dtype=torch.bool)
+        self.action_spec = Binary(shape=(1,), dtype=torch.float32)
         self.reward_spec = UnboundedContinuous(shape=(1,), dtype=torch.float32)
 
-    @staticmethod
-    def _meta_state_from_base_td(base_td):
-        # Note the use of .detach() to avoid backpropagating through the base agent
-        # TODO: detach or not? requires_grad or not?
-        # TODO: use true_reward or reward?
-        return torch.tensor(
-            [
-                base_td["next", "reward"].mean(),
-                base_td["next", "reward"].std(),
-            ]
-        )
+    # @staticmethod
+    # def _meta_state_from_base_td(meta_td, base_td):
+    #     # Note the use of .detach() to avoid backpropagating through the base agent
+    #     # TODO: detach or not? requires_grad or not?
+    #     # TODO: use true_reward or reward?
+    #     return TensorDict(
+    #         {
+    #             "base_mean_reward": base_td["next", "reward"].mean(),
+    #             "base_std_reward": base_td["next", "reward"].std(),
+    #             "current_weight": meta_td["step"] + 1,
+    #         }
+    #     )
 
-    @staticmethod
-    def _meta_reward_from_base_td(base_td):
-        # Note the use of .detach() to avoid backpropagating through the base agent
-        return base_td["next", "true_reward"].mean()
+    # @staticmethod
+    # def _meta_reward_from_base_td(meta_td, base_td):
+    #     # Note the use of .detach() to avoid backpropagating through the base agent
+    #     return base_td["next", "true_reward"].mean()
