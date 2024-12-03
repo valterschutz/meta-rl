@@ -6,18 +6,25 @@ import torch.nn.functional as F
 from abc import ABC, abstractmethod
 from typing import Optional
 
+from tensordict.nn import InteractionType
+
+
 from torchrl.modules.tensordict_module import ProbabilisticActor, ValueOperator
 from torchrl.data.replay_buffers import LazyTensorStorage, SamplerWithoutReplacement
 from torchrl.data import Categorical, Binary, UnboundedContinuous, ReplayBuffer
 from torchrl.objectives import ClipPPOLoss, A2CLoss, DDPGLoss
 from torchrl.objectives.value import GAE
-from torchrl.modules import IndependentNormal
+
+# from torchrl.modules import IndependentNormal
 
 from utils import OneHotLayer, print_computational_graph
 
 from tensordict import TensorDict
 from tensordict.nn import TensorDictModule
 from tensordict.nn.distributions import NormalParamExtractor
+from torchrl.modules import TruncatedNormal
+
+import wandb
 
 
 class PPOAgent(ABC):
@@ -90,7 +97,7 @@ class PPOAgent(ABC):
         self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
         self.replay_buffer.empty()
 
-    def process_batch(self, td):
+    def process_batch(self, td, verbose=False):
         # Detach sample_log_prob and action from the graph. TODO: understand why
         td["sample_log_prob"] = td["sample_log_prob"].detach()
         td["action"] = td["action"].detach()
@@ -149,6 +156,7 @@ class PPOAgent(ABC):
             },
             batch_size=(),
         )
+
         return losses, max_grad_norm
 
 
@@ -174,6 +182,7 @@ class BaseAgent(PPOAgent):
             spec=self.action_spec,
             in_keys=["logits"],
             distribution_class=torch.distributions.Categorical,
+            default_interaction_type=InteractionType.RANDOM,
             return_log_prob=True,
         )
 
@@ -212,19 +221,23 @@ class MetaAgent(PPOAgent):
         actor_net = nn.Sequential(
             nn.Linear(self.state_spec["state"].shape[-1], self.hidden_units),
             nn.Tanh(),
-            nn.Linear(self.hidden_units, 1),
-            nn.Sigmoid(),
+            nn.Linear(self.hidden_units, 2),
+            NormalParamExtractor(),
         ).to(self.device)
         policy = TensorDictModule(
             actor_net,
             in_keys=["state"],
-            out_keys=["param"],
+            out_keys=["loc", "scale"],
         )
         policy = ProbabilisticActor(
             module=policy,
             spec=self.action_spec,
-            in_keys=["param"],
+            in_keys=["loc", "scale"],
             return_log_prob=True,
+            default_interaction_type=InteractionType.RANDOM,
+            distribution_class=TruncatedNormal,
+            distribution_kwargs={"low": 0, "high": 1},
+            # default_interaction_type="InteractionType.RANDOM",
         )
 
         return actor_net, policy
@@ -301,6 +314,10 @@ class ValueIterationAgent:
                         (prev_Q - self.Q[state, action]).abs().item(),
                     )
             # fail
+
+    def policy(self, td):
+        td["action"] = self.Q[td["state"].long()].argmax(dim=-1)
+        return td
 
 
 def slow_policy(td):

@@ -23,7 +23,8 @@ def train_base(config, interactive=None):
     {"no_weight_fraction", "full_weight_fraction"}.
     """
 
-    env, agent, collector = get_base_from_config(config)
+    env, agent, collector_fn = get_base_from_config(config)
+    collector = collector_fn()
 
     # A couple of baseline agents to use in the verbose case
     if interactive:
@@ -111,5 +112,8 @@ if __name__ == "__main__":
     )
     train_base(
         DictWrapper(config),
-        interactive={"no_weight_fraction": 0.99, "full_weight_fraction": 1.0},
+        interactive={
+            "no_weight_fraction": config["no_weight_fraction"],
+            "full_weight_fraction": config["full_weight_fraction"],
+        },
     )

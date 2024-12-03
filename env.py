@@ -137,6 +137,7 @@ class BaseEnv(EnvBase):
     def _make_spec(self):
         self.observation_spec = Composite(
             state=Categorical(self.n_states, shape=(), dtype=torch.int32),
+            true_reward=UnboundedContinuous(shape=(), dtype=torch.float32),
             shape=(),
         )
         self.state_spec = Composite(
@@ -161,6 +162,7 @@ class BaseEnv(EnvBase):
         out = TensorDict(
             {
                 "state": state,
+                "true_reward": torch.zeros(state.shape, dtype=torch.float32),
             },
             batch_size=shape,
         )
@@ -177,6 +179,7 @@ class BaseEnv(EnvBase):
 
         next_state = state.clone()
         reward = 0 * torch.ones_like(state, dtype=torch.int)
+        true_reward = 0 * torch.ones_like(state, dtype=torch.int)
 
         mask_even = state % 2 == 0
 
@@ -191,27 +194,32 @@ class BaseEnv(EnvBase):
         # Up action
         next_state = torch.where(mask_even & (action == 3), state + 2, next_state)
 
-        # print(f"Constraints enabled: {self.constraints_enabled}")
         if self.constraints_enabled:
-            # print(f"Constraints enabled")
             # Left action
             reward = torch.where(
                 action == 0, self.left_weight * self.left_reward, reward
             )
+            true_reward = torch.where(action == 0, 1 * self.left_reward, true_reward)
             # Right action
             reward = torch.where(
                 action == 1, self.right_weight * self.right_reward, reward
             )
+            true_reward = torch.where(action == 1, 1 * self.right_reward, true_reward)
+
             # Down action
             reward = torch.where(
                 mask_even & (action == 2), self.down_weight * self.down_reward, reward
+            )
+            true_reward = torch.where(
+                mask_even & (action == 2), 1 * self.down_reward, true_reward
             )
             # Up action
             reward = torch.where(
                 mask_even & (action == 3), self.up_weight * self.up_reward, reward
             )
-        # else:
-        # print(f"Constraints disabled")
+            true_reward = torch.where(
+                mask_even & (action == 3), 1 * self.up_reward, true_reward
+            )
 
         # Ensure that we can never move past the end pos
         next_state = torch.where(
@@ -224,9 +232,13 @@ class BaseEnv(EnvBase):
         # Punish for moving to the same pos
         done = torch.zeros_like(state, dtype=torch.bool)
         reward = torch.where(next_state == state, -self.punishment, reward)
+        true_reward = torch.where(next_state == state, -self.punishment, true_reward)
 
         # Big reward for reaching the end pos, overriding the possible constraints
         reward = torch.where(next_state == self.n_states - 1, self.big_reward, reward)
+        true_reward = torch.where(
+            next_state == self.n_states - 1, self.big_reward, true_reward
+        )
         # If we reach final pos, we're done
         done = torch.where(next_state == self.n_states - 1, 1.0, done).to(torch.bool)
 
@@ -234,6 +246,7 @@ class BaseEnv(EnvBase):
             {
                 "state": next_state,
                 "reward": reward,
+                "true_reward": true_reward,
                 "done": done,
             },
             td.shape,
@@ -289,6 +302,13 @@ class MetaEnv(EnvBase):
         self.base_collector_fn = base_collector_fn
         # self.base_iter = iter(self.base_collector)
 
+        # Calculate batch size, necessary to know size of observations for meta agent
+        # self.base_collector_fn = self.base_collector_fn()
+        dummy_td = next(iter(self.base_collector_fn()))
+        # print(f"dummy_td: {dummy_td}")
+        self.base_batch_size = dummy_td.batch_size.numel()
+        # print(f"base_batch_size: {self.base_batch_size}")
+
         self._make_spec()
         if seed is None:
             seed = torch.empty((), dtype=torch.int64).random_().item()
@@ -304,33 +324,45 @@ class MetaEnv(EnvBase):
         return TensorDict(
             {
                 "state": torch.tensor([0.0, 0.0]),
-                "base_agent_losses": TensorDict(
+                "base": TensorDict(
                     {
-                        "loss_objective": torch.tensor(
-                            0.0, device=self.device, dtype=torch.float32
+                        "losses": TensorDict(
+                            {
+                                "loss_objective": torch.tensor(
+                                    0.0, device=self.device, dtype=torch.float32
+                                ),
+                                "loss_critic": torch.tensor(
+                                    0.0, device=self.device, dtype=torch.float32
+                                ),
+                                "loss_entropy": torch.tensor(
+                                    0.0, device=self.device, dtype=torch.float32
+                                ),
+                            },
+                            batch_size=(),
                         ),
-                        "loss_critic": torch.tensor(
-                            0.0, device=self.device, dtype=torch.float32
+                        "grad_norm": torch.tensor(0.0),
+                        "states": torch.zeros(self.base_batch_size, dtype=torch.int32),
+                        "rewards": torch.zeros(
+                            (self.base_batch_size, 1), dtype=torch.float32
                         ),
-                        "loss_entropy": torch.tensor(
-                            0.0, device=self.device, dtype=torch.float32
+                        "true_rewards": torch.zeros(
+                            self.base_batch_size, dtype=torch.float32
                         ),
                     },
                     batch_size=(),
                 ),
-                "base_agent_grad_norm": torch.tensor(0.0),
-            }
+            },
+            batch_size=(),
         )
 
     def _set_seed(self, seed: Optional[int]):
         rng = torch.manual_seed(seed)
         self.rng = rng
 
-    def _step(self, td):
-        # One meta step equals processing one batch of base agent data
+    def _step(self, td, verbose=False):
+        """Takes one step in the meta environment, returning the next meta td and also the base td"""
 
         # Apply meta action, which will affect self.base_iter
-        # print(f"td['action']: {td['action']}")
         self.base_env.set_constraint_weight(td["action"].item())
 
         # Get next base batch and update base agent
@@ -338,9 +370,7 @@ class MetaEnv(EnvBase):
             base_td = next(self.base_iter)
             state = self._meta_state_from_base_td(base_td)
             reward = self._meta_reward_from_base_td(base_td)
-            base_agent_losses, base_agent_grad_norm = self.base_agent.process_batch(
-                base_td
-            )
+            base_losses, base_grad_norm = self.base_agent.process_batch(base_td)
             done = False
             self.prev_base_td = base_td
         except StopIteration:
@@ -348,7 +378,7 @@ class MetaEnv(EnvBase):
             state = self._meta_state_from_base_td(self.prev_base_td)
             reward = 0.0  # Always 0 reward in the terminal state
             # No losses in the terminal state
-            base_agent_losses = TensorDict(
+            base_losses = TensorDict(
                 {
                     "loss_objective": torch.tensor(
                         0.0, device=self.device, dtype=torch.float32
@@ -361,7 +391,7 @@ class MetaEnv(EnvBase):
                     ),
                 }
             )
-            base_agent_grad_norm = 0.0
+            base_grad_norm = 0.0
             done = True
 
         # Next meta state is the mean and std of the base rewards, next meta reward is the mean base reward
@@ -369,24 +399,43 @@ class MetaEnv(EnvBase):
             {
                 "state": state,
                 "reward": reward,
-                "base_agent_losses": base_agent_losses,
-                "base_agent_grad_norm": base_agent_grad_norm,
                 "done": done,
             },
             batch_size=(),
         )
+
+        meta_td["base", "states"] = base_td["state"]
+        meta_td["base", "rewards"] = base_td["next", "reward"]
+        meta_td["base", "true_rewards"] = base_td["next", "true_reward"]
+        meta_td["base", "losses"] = base_losses
+        meta_td["base", "grad_norm"] = base_grad_norm
 
         return meta_td
 
     def _make_spec(self):
         self.observation_spec = Composite(
             state=UnboundedContinuous(shape=(2,), dtype=torch.float32),
-            base_agent_losses=Composite(
-                loss_objective=UnboundedContinuous(shape=(), dtype=torch.float32),
-                loss_critic=UnboundedContinuous(shape=(), dtype=torch.float32),
-                loss_entropy=UnboundedContinuous(shape=(), dtype=torch.float32),
+            base=Composite(
+                losses=Composite(
+                    loss_objective=UnboundedContinuous(shape=(), dtype=torch.float32),
+                    loss_critic=UnboundedContinuous(shape=(), dtype=torch.float32),
+                    loss_entropy=UnboundedContinuous(shape=(), dtype=torch.float32),
+                    batch_size=(),
+                ),
+                states=Categorical(
+                    self.base_env.n_states,
+                    shape=(self.base_batch_size,),
+                    dtype=torch.int32,
+                ),
+                rewards=UnboundedContinuous(
+                    shape=(self.base_batch_size, 1), dtype=torch.float32
+                ),
+                true_rewards=UnboundedContinuous(
+                    shape=(self.base_batch_size), dtype=torch.float32
+                ),
+                grad_norm=UnboundedContinuous(shape=(), dtype=torch.float32),
+                batch_size=(),
             ),
-            base_agent_grad_norm=UnboundedContinuous(shape=(), dtype=torch.float32),
             shape=(),
         )
         self.state_spec = Composite(
@@ -399,6 +448,7 @@ class MetaEnv(EnvBase):
     def _meta_state_from_base_td(base_td):
         # Note the use of .detach() to avoid backpropagating through the base agent
         # TODO: detach or not? requires_grad or not?
+        # TODO: use true_reward or reward?
         return torch.tensor(
             [
                 base_td["next", "reward"].mean(),
@@ -409,4 +459,4 @@ class MetaEnv(EnvBase):
     @staticmethod
     def _meta_reward_from_base_td(base_td):
         # Note the use of .detach() to avoid backpropagating through the base agent
-        return base_td["next", "reward"].mean()
+        return base_td["next", "true_reward"].mean()

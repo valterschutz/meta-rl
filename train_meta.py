@@ -18,6 +18,7 @@ from base import get_base_from_config
 from env import MetaEnv
 from utils import DictWrapper, MethodLogger
 import argparse
+import tensordict
 
 
 parser = argparse.ArgumentParser()
@@ -38,6 +39,40 @@ meta_env = MetaEnv(
     base_collector_fn=base_collector_fn,
     device=meta_config["device"],
 )
+# fake_tensordict = meta_env.fake_tensordict()
+# out_td = torch.stack(tensordicts, len(batch_size), out=out)
+# real_tensordict = meta_env.reset()
+# kwargs = {
+#     "tensordict": real_tensordict,
+#     "auto_cast_to_device": False,
+#     "max_steps": 3,
+#     "policy": meta_env.rand_action,
+#     "policy_device": None,
+#     "env_device": meta_env.device,
+#     "callback": None,
+# }
+# tensordicts = meta_env._rollout_stop_early(
+#     break_when_all_done=False,
+#     break_when_any_done=True,
+#     **kwargs,
+# )
+# print(f"{tensordicts[0]=}")
+# print(f"{tensordicts[1]=}")
+# print(f"{tensordicts[2]=}")
+# torch.stack
+# out_td = torch.stack(tensordicts, 0, out=None)
+# real_tensordict = meta_env.rollout(3, return_contiguous=True)
+# fake_tensordict = fake_tensordict.unsqueeze(real_tensordict.batch_dims - 1)
+# fake_tensordict = fake_tensordict.expand(*real_tensordict.shape)
+# fake_tensordict_select = fake_tensordict.select(
+#     *fake_tensordict.keys(True, True, is_leaf=tensordict.base._default_is_leaf)
+# )
+# print(f"{fake_tensordict_select=}")
+# real_tensordict_select = real_tensordict.select(
+#     *real_tensordict.keys(True, True, is_leaf=tensordict.base._default_is_leaf)
+# )
+# print(f"{real_tensordict_select=}")
+# fail
 check_env_specs(meta_env)
 
 # Meta agent
@@ -57,6 +92,14 @@ meta_agent = MetaAgent(
     hidden_units=meta_config["hidden_units"],
 )
 
+# Try to do a rollout
+# meta_td = meta_env.reset()
+# meta_td = meta_agent.policy(meta_td)
+# meta_td = meta_env.step(meta_td)
+# meta_td = step_mdp(meta_td)
+# fail
+
+
 meta_steps_per_episode = base_config["total_frames"] // base_config["batch_size"]
 meta_total_steps = meta_steps_per_episode * meta_config["episodes"]
 pbar = tqdm(total=meta_total_steps)
@@ -72,29 +115,32 @@ wandb.init(
 )
 
 for i in range(meta_config["episodes"]):
-    td = meta_env.reset()  # Resets base agent in meta environment
+    meta_td = meta_env.reset()  # Resets base agent in meta environment
     for j in range(meta_steps_per_episode):
-        td = meta_agent.policy(td)
-        td = meta_env.step(td)
-        losses, max_grad = meta_agent.process_batch(td.unsqueeze(0))
-        pbar.update(td.numel())
+        meta_td = meta_agent.policy(meta_td)
+        meta_td = meta_env.step(meta_td)
+        meta_losses, meta_max_grad = meta_agent.process_batch(meta_td.unsqueeze(0))
+        pbar.update(meta_td.numel())
         wandb.log(
             {
                 "step": j,
-                "state 1": td["state"][0].item(),
-                "state 2": td["state"][1].item(),
-                "action": td["action"].item(),
-                "reward": td["next", "reward"].item(),
-                "loss_objective": losses["loss_objective"].item(),
-                "loss_critic": losses["loss_critic"].item(),
-                "loss_entropy": losses["loss_entropy"].item(),
-                "base_agent loss_objective": td[
-                    "base_agent_losses", "loss_objective"
+                "meta state 1": meta_td["state"][0].item(),
+                "meta state 2": meta_td["state"][1].item(),
+                "meta action": meta_td["action"].item(),
+                "meta reward": meta_td["next", "reward"].item(),
+                "meta loss_objective": meta_losses["loss_objective"].item(),
+                "meta loss_critic": meta_losses["loss_critic"].item(),
+                "meta loss_entropy": meta_losses["loss_entropy"].item(),
+                "base loss_objective": meta_td[
+                    "base", "losses", "loss_objective"
                 ].item(),
-                "base_agent loss_critic": td["base_agent_losses", "loss_critic"].item(),
-                "base_agent loss_entropy": td[
-                    "base_agent_losses", "loss_entropy"
-                ].item(),
+                "base loss_critic": meta_td["base", "losses", "loss_critic"].item(),
+                "base loss_entropy": meta_td["base", "losses", "loss_entropy"].item(),
+                "base state distribution": wandb.Histogram(meta_td["base", "states"]),
+                "base reward distribution": wandb.Histogram(meta_td["base", "rewards"]),
+                "base true_reward distribution": wandb.Histogram(
+                    meta_td["base", "true_rewards"]
+                ),
             }
         )
-        td = step_mdp(td)
+        meta_td = step_mdp(meta_td)
