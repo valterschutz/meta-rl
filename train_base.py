@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 import wandb
 from agents import ValueIterationAgent, fast_policy, slow_policy
-from base import get_base_from_config
+from base import get_base_from_config, print_base_rollout
 from utils import calc_return, DictWrapper
 
 

@@ -1,4 +1,5 @@
 import json
+import pickle
 import sys
 from datetime import datetime
 
@@ -39,40 +40,7 @@ meta_env = MetaEnv(
     base_collector_fn=base_collector_fn,
     device=meta_config["device"],
 )
-# fake_tensordict = meta_env.fake_tensordict()
-# out_td = torch.stack(tensordicts, len(batch_size), out=out)
-# real_tensordict = meta_env.reset()
-# kwargs = {
-#     "tensordict": real_tensordict,
-#     "auto_cast_to_device": False,
-#     "max_steps": 3,
-#     "policy": meta_env.rand_action,
-#     "policy_device": None,
-#     "env_device": meta_env.device,
-#     "callback": None,
-# }
-# tensordicts = meta_env._rollout_stop_early(
-#     break_when_all_done=False,
-#     break_when_any_done=True,
-#     **kwargs,
-# )
-# print(f"{tensordicts[0]=}")
-# print(f"{tensordicts[1]=}")
-# print(f"{tensordicts[2]=}")
-# torch.stack
-# out_td = torch.stack(tensordicts, 0, out=None)
-# real_tensordict = meta_env.rollout(3, return_contiguous=True)
-# fake_tensordict = fake_tensordict.unsqueeze(real_tensordict.batch_dims - 1)
-# fake_tensordict = fake_tensordict.expand(*real_tensordict.shape)
-# fake_tensordict_select = fake_tensordict.select(
-#     *fake_tensordict.keys(True, True, is_leaf=tensordict.base._default_is_leaf)
-# )
-# print(f"{fake_tensordict_select=}")
-# real_tensordict_select = real_tensordict.select(
-#     *real_tensordict.keys(True, True, is_leaf=tensordict.base._default_is_leaf)
-# )
-# print(f"{real_tensordict_select=}")
-# fail
+
 check_env_specs(meta_env)
 
 # Meta agent
@@ -92,16 +60,8 @@ meta_agent = MetaAgent(
     hidden_units=meta_config["hidden_units"],
 )
 
-# Try to do a rollout
-# meta_td = meta_env.reset()
-# meta_td = meta_agent.policy(meta_td)
-# meta_td = meta_env.step(meta_td)
-# meta_td = step_mdp(meta_td)
-# fail
-
-
 meta_steps_per_episode = base_config["total_frames"] // base_config["batch_size"]
-meta_total_steps = meta_steps_per_episode * meta_config["episodes"]
+meta_total_steps = meta_steps_per_episode * meta_config["train_episodes"]
 pbar = tqdm(total=meta_total_steps)
 
 wandb.login()
@@ -114,7 +74,7 @@ wandb.init(
     },
 )
 
-for i in range(meta_config["episodes"]):
+for i in range(meta_config["train_episodes"]):
     meta_td = meta_env.reset()  # Resets base agent in meta environment
     for j in range(meta_steps_per_episode):
         meta_td = meta_agent.policy(meta_td)
@@ -132,6 +92,7 @@ for i in range(meta_config["episodes"]):
                 "meta loss_objective": meta_losses["loss_objective"].item(),
                 "meta loss_critic": meta_losses["loss_critic"].item(),
                 "meta loss_entropy": meta_losses["loss_entropy"].item(),
+                "meta max_grad_norm": meta_max_grad,
                 "base loss_objective": meta_td[
                     "base", "losses", "loss_objective"
                 ].item(),
@@ -145,3 +106,13 @@ for i in range(meta_config["episodes"]):
             }
         )
         meta_td = step_mdp(meta_td)
+
+# Save meta agent
+torch.save(
+    meta_agent.policy_module.state_dict(),
+    f"models/{meta_config['policy_module_name']}.pth",
+)
+torch.save(
+    meta_agent.value_module.state_dict(),
+    f"models/{meta_config['value_module_name']}.pth",
+)

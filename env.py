@@ -12,6 +12,7 @@ from torchrl.data import (
     Unbounded,
     Categorical,
     UnboundedContinuous,
+    UnboundedDiscrete,
     Binary,
 )
 from torchrl.envs import (
@@ -303,7 +304,8 @@ class MetaEnv(EnvBase):
         # self.base_iter = iter(self.base_collector)
 
         # Calculate batch size, necessary to know size of observations for meta agent
-        dummy_td = next(iter(self.base_collector_fn()))
+        i = iter(self.base_collector_fn())
+        dummy_td = next(i)
         self.base_batch_size = dummy_td.batch_size.numel()
 
         self._make_spec()
@@ -312,7 +314,7 @@ class MetaEnv(EnvBase):
         self.set_seed(seed)
 
     def _reset(self, td):
-        self.base_agent.reset()
+        self.base_agent.reset(mode="train")
         # Reset the base collector
         base_collector = self.base_collector_fn()
 
@@ -350,6 +352,7 @@ class MetaEnv(EnvBase):
                     },
                     batch_size=(),
                 ),
+                "step": torch.tensor([0.0], dtype=torch.float32),
             },
             batch_size=(),
         )
@@ -374,6 +377,7 @@ class MetaEnv(EnvBase):
         next_meta_td["reward"] = base_td["next", "true_reward"].mean(0)
         base_losses, base_grad_norm = self.base_agent.process_batch(base_td)
         next_meta_td["done"] = not self.is_batches_remaining(self.base_iter)
+        next_meta_td["step"] = meta_td["step"] + 1
 
         next_meta_td["base", "states"] = base_td["state"]
         next_meta_td["base", "rewards"] = base_td["next", "reward"]
@@ -394,15 +398,15 @@ class MetaEnv(EnvBase):
     def _make_spec(self):
         self.observation_spec = Composite(
             # The state
-            base_mean_reward=UnboundedContinuous(shape=(1,), dtype=torch.float32),
-            base_std_reward=UnboundedContinuous(shape=(1,), dtype=torch.float32),
-            last_action=Binary(shape=(1,), dtype=torch.float32),
+            base_mean_reward=Unbounded(shape=(1,), dtype=torch.float32),
+            base_std_reward=Unbounded(shape=(1,), dtype=torch.float32),
+            last_action=Bounded(low=0, high=1, shape=(1,), dtype=torch.float32),
             # Base agent that we observe
             base=Composite(
                 losses=Composite(
-                    loss_objective=UnboundedContinuous(shape=(), dtype=torch.float32),
-                    loss_critic=UnboundedContinuous(shape=(), dtype=torch.float32),
-                    loss_entropy=UnboundedContinuous(shape=(), dtype=torch.float32),
+                    loss_objective=Unbounded(shape=(), dtype=torch.float32),
+                    loss_critic=Unbounded(shape=(), dtype=torch.float32),
+                    loss_entropy=Unbounded(shape=(), dtype=torch.float32),
                     batch_size=(),
                 ),
                 states=Categorical(
@@ -410,23 +414,23 @@ class MetaEnv(EnvBase):
                     shape=(self.base_batch_size,),
                     dtype=torch.int32,
                 ),
-                rewards=UnboundedContinuous(
-                    shape=(self.base_batch_size, 1), dtype=torch.float32
-                ),
-                true_rewards=UnboundedContinuous(
+                rewards=Unbounded(shape=(self.base_batch_size, 1), dtype=torch.float32),
+                true_rewards=Unbounded(
                     shape=(self.base_batch_size), dtype=torch.float32
                 ),
-                grad_norm=UnboundedContinuous(shape=(), dtype=torch.float32),
+                grad_norm=Unbounded(shape=(), dtype=torch.float32),
                 batch_size=(),
             ),
+            step=Unbounded(shape=(1,), dtype=torch.float32),
             shape=(),
         )
         self.state_spec = Composite(
-            base_mean_reward=UnboundedContinuous(shape=(1,), dtype=torch.float32),
-            base_std_reward=UnboundedContinuous(shape=(1,), dtype=torch.float32),
-            last_action=Binary(shape=(1,), dtype=torch.float32),
+            base_mean_reward=Unbounded(shape=(1,), dtype=torch.float32),
+            base_std_reward=Unbounded(shape=(1,), dtype=torch.float32),
+            last_action=Bounded(low=0, high=1, shape=(1,), dtype=torch.float32),
+            step=Unbounded(shape=(1,), dtype=torch.float32),
         )
-        self.action_spec = Binary(shape=(1,), dtype=torch.float32)
+        self.action_spec = Bounded(low=0, high=1, shape=(1,), dtype=torch.float32)
         self.reward_spec = UnboundedContinuous(shape=(1,), dtype=torch.float32)
 
     # @staticmethod

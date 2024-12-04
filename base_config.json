@@ -1,7 +1,7 @@
 {
     "n_states": 20,
-    "return_x": 0.2,
-    "return_y": 0.1,
+    "return_x": 2,
+    "return_y": 1,
     "big_reward": 10,
     "gamma": 0.99,
     "punishment": 0.0,
@@ -16,6 +16,6 @@
     "constraints_enabled": true,
     "clip_epsilon": 0.2,
     "use_entropy": false,
-    "no_weight_fraction": 0.2,
-    "full_weight_fraction": 0.8
+    "no_weight_fraction": 0.99,
+    "full_weight_fraction": 1.0
 }

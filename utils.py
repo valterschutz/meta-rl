@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch import Tensor
 
 import wandb
 
@@ -19,13 +20,27 @@ class OneHotLayer(nn.Module):
         return x_onehot
 
 
-def calc_return(td, gamma):
-    """Calculate return for a single rollout"""
+def calc_return(t: Tensor, gamma: float, discount_start=0):
+    """
+    Calculate the return for a single rollout.
 
-    G = 0
-    for i in range(len(td)):
-        G += td["next", "reward"][i].item() * gamma**i
-    return G
+    Args:
+        t (Tensor): 1-dimensional tensor of rewards.
+        gamma (float): Discount factor.
+        discount_start (int): Starting exponent for discounting (default: 0).
+
+    Returns:
+        float: The total discounted return.
+    """
+
+    if t.dim() != 1:
+        raise ValueError("Input tensor `t` must be 1-dimensional.")
+
+    # Compute discount factors
+    discounts = gamma ** (torch.arange(len(t)) + discount_start)
+
+    # Calculate the discounted return
+    return (t * discounts).sum().item()
 
 
 class DictWrapper:
