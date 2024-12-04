@@ -22,20 +22,22 @@ from env import MetaEnv
 from utils import DictWrapper, MethodLogger, calc_return
 
 
-def eval_meta_policy(meta_env, meta_config, base_config, meta_policy):
+def eval_meta_policy(meta_env, meta_config, base_config, meta_policy, verbose=False):
     pbar = tqdm(total=meta_config["eval_episodes"])
     score = torch.zeros(meta_config["eval_episodes"], dtype=torch.float32)
     for i in range(meta_config["eval_episodes"]):
-        meta_td = meta_env.rollout(meta_config["rollout_timeout"], meta_policy)
-        # Calculate return experienced by base agent
-        episode_base_true_return = 0
-        for j in range(len(meta_td)):
-            episode_base_true_return += calc_return(
-                meta_td["base", "true_rewards"][j],
-                base_config["gamma"],
-                discount_start=j * base_config["batch_size"],
+        # Train the base agent using some meta policy
+        _ = meta_env.rollout(meta_config["rollout_timeout"], meta_policy)
+        # Once base agent is trained, evaluate it
+        with set_exploration_type(ExplorationType.DETERMINISTIC):
+            base_td = meta_env.base_env.rollout(
+                base_config["rollout_timeout"], base_agent.policy
             )
-        score[i] = episode_base_true_return
+        # If verbose, print out all the true rewards
+        if verbose:
+            print(base_td["true_reward"])
+        # Calculate true return experienced by base agent
+        score[i] = calc_return(base_td["true_reward"], base_config["gamma"])
         pbar.update(1)
     return score
 

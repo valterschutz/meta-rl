@@ -107,7 +107,7 @@ class BaseEnv(EnvBase):
         punishment=0,
         seed=None,
         device="cpu",
-        constraints_enabled=False,
+        # constraints_enabled=False,
         left_weight=1.0,
         right_weight=1.0,
         down_weight=1.0,
@@ -124,7 +124,7 @@ class BaseEnv(EnvBase):
         self.big_reward = big_reward
         self.random_start = random_start
         self.punishment = punishment
-        self.constraints_enabled = constraints_enabled
+        # self.constraints_enabled = constraints_enabled
         self.left_weight = left_weight
         self.right_weight = right_weight
         self.down_weight = down_weight
@@ -195,32 +195,27 @@ class BaseEnv(EnvBase):
         # Up action
         next_state = torch.where(mask_even & (action == 3), state + 2, next_state)
 
-        if self.constraints_enabled:
-            # Left action
-            reward = torch.where(
-                action == 0, self.left_weight * self.left_reward, reward
-            )
-            true_reward = torch.where(action == 0, 1 * self.left_reward, true_reward)
-            # Right action
-            reward = torch.where(
-                action == 1, self.right_weight * self.right_reward, reward
-            )
-            true_reward = torch.where(action == 1, 1 * self.right_reward, true_reward)
+        # Left action
+        reward = torch.where(action == 0, self.left_weight * self.left_reward, reward)
+        true_reward = torch.where(action == 0, 1 * self.left_reward, true_reward)
+        # Right action
+        reward = torch.where(action == 1, self.right_weight * self.right_reward, reward)
+        true_reward = torch.where(action == 1, 1 * self.right_reward, true_reward)
 
-            # Down action
-            reward = torch.where(
-                mask_even & (action == 2), self.down_weight * self.down_reward, reward
-            )
-            true_reward = torch.where(
-                mask_even & (action == 2), 1 * self.down_reward, true_reward
-            )
-            # Up action
-            reward = torch.where(
-                mask_even & (action == 3), self.up_weight * self.up_reward, reward
-            )
-            true_reward = torch.where(
-                mask_even & (action == 3), 1 * self.up_reward, true_reward
-            )
+        # Down action
+        reward = torch.where(
+            mask_even & (action == 2), self.down_weight * self.down_reward, reward
+        )
+        true_reward = torch.where(
+            mask_even & (action == 2), 1 * self.down_reward, true_reward
+        )
+        # Up action
+        reward = torch.where(
+            mask_even & (action == 3), self.up_weight * self.up_reward, reward
+        )
+        true_reward = torch.where(
+            mask_even & (action == 3), 1 * self.up_reward, true_reward
+        )
 
         # Ensure that we can never move past the end pos
         next_state = torch.where(
@@ -254,9 +249,6 @@ class BaseEnv(EnvBase):
         )
         return out
 
-    def set_constraint_state(self, constraints_enabled):
-        self.constraints_enabled = constraints_enabled
-
     @staticmethod
     def calculate_xy(n_states, return_x, return_y, big_reward, gamma):
         # Assuming n_pos is even, calculate x and y
@@ -270,7 +262,6 @@ class BaseEnv(EnvBase):
     @classmethod
     def get_base_env(cls, **kwargs):
         env = cls(**kwargs)
-        env.constraints_enabled = kwargs["constraints_enabled"]
         env = TransformedEnv(env, Compose(StepCounter()))
         check_env_specs(env)
         return env

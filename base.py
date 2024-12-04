@@ -34,8 +34,7 @@ def get_base_from_config(config):
         random_start=False,
         punishment=config.punishment,
         seed=None,
-        device="cpu",
-        constraints_enabled=config.constraints_enabled,
+        device=config.device,
     ).to(config.device)
     check_env_specs(env)
 

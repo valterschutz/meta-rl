@@ -35,7 +35,7 @@ def train_base(config, interactive=None):
     value_agent = ValueIterationAgent(env, gamma=config.gamma)
     value_agent.update_values()
     optimal_td = env.rollout(config.rollout_timeout, value_agent.policy)
-    optimal_return = calc_return(optimal_td, config.gamma)
+    optimal_return = calc_return(optimal_td["next", "reward"].flatten(), config.gamma)
 
     pbar = tqdm(total=collector.total_frames)
 
@@ -62,7 +62,8 @@ def train_base(config, interactive=None):
 
         with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
             eval_td = env.rollout(config.rollout_timeout, agent.policy)
-        agent_return = calc_return(eval_td, config.gamma)
+        agent_return = calc_return(eval_td["next", "reward"].flatten(), config.gamma)
+        agent_true_return = calc_return(eval_td["true_reward"].flatten(), config.gamma)
         batch_dissimilarity = (optimal_return - agent_return) / optimal_return
         return_dissimilarity += batch_dissimilarity
 
@@ -70,13 +71,24 @@ def train_base(config, interactive=None):
         if interactive:
             # Slow policy benchmark
             slow_td = env.rollout(config.rollout_timeout, slow_policy)
-            slow_return = calc_return(slow_td, config.gamma)
+            slow_return = calc_return(slow_td["next", "reward"].flatten(), config.gamma)
+            slow_true_return = calc_return(
+                slow_td["true_reward"].flatten(), config.gamma
+            )
             # Fast policy benchmark
             fast_td = env.rollout(config.rollout_timeout, fast_policy)
-            fast_return = calc_return(fast_td, config.gamma)
+            fast_return = calc_return(fast_td["next", "reward"].flatten(), config.gamma)
+            fast_true_return = calc_return(
+                fast_td["true_reward"].flatten(), config.gamma
+            )
             # Optimal policy benchmark
             optimal_td = env.rollout(config.rollout_timeout, value_agent.policy)
-            optimal_return = calc_return(optimal_td, config.gamma)
+            optimal_return = calc_return(
+                optimal_td["next", "reward"].flatten(), config.gamma
+            )
+            optimal_true_return = calc_return(
+                optimal_td["true_reward"].flatten(), config.gamma
+            )
             wandb.log(
                 {
                     "constraint_weight": constraint_weight,
@@ -87,9 +99,13 @@ def train_base(config, interactive=None):
                     "loss_entropy": losses["loss_entropy"].item(),
                     "max_grad_norm": max_grad_norm,
                     "eval return": agent_return,
+                    "eval true return": agent_true_return,
                     "eval optimal return": optimal_return,
                     "eval slow return": slow_return,
                     "eval fast return": fast_return,
+                    "eval optimal true return": optimal_true_return,
+                    "eval slow true return": slow_true_return,
+                    "eval fast true return": fast_true_return,
                     "eval state distribution": wandb.Histogram(eval_td["state"]),
                     "eval reward distribution": wandb.Histogram(
                         eval_td["next", "reward"]

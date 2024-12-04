@@ -13,9 +13,8 @@
     "total_frames": 2000,
     "rollout_timeout": 200,
     "lr": 2e-2,
-    "constraints_enabled": true,
     "clip_epsilon": 0.2,
     "use_entropy": false,
-    "no_weight_fraction": 0.99,
-    "full_weight_fraction": 1.0
+    "no_weight_fraction": 0.2,
+    "full_weight_fraction": 0.8
 }
