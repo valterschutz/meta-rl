@@ -20,6 +20,7 @@ from env import MetaEnv
 from utils import DictWrapper, MethodLogger
 import argparse
 import tensordict
+import yaml
 
 
 parser = argparse.ArgumentParser()
@@ -27,9 +28,9 @@ parser.add_argument("base_config", type=str)
 parser.add_argument("meta_config", type=str)
 args = parser.parse_args()
 with open(args.base_config, "r", encoding="UTF-8") as f:
-    base_config = json.load(f)
+    base_config = yaml.safe_load(f)
 with open(args.meta_config, "r", encoding="UTF-8") as f:
-    meta_config = json.load(f)
+    meta_config = yaml.safe_load(f)
 
 base_env, base_agent, base_collector_fn = get_base_from_config(DictWrapper(base_config))
 

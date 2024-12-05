@@ -1,0 +1,13 @@
+lr: 0.00001
+max_grad_norm: 10
+gamma: 1
+lmbda: 0.5
+hidden_units: 32
+clip_epsilon: 0.2
+use_entropy: false
+train_episodes: 2
+eval_episodes: 3
+device: "cpu"
+policy_module_name: "policy_module"
+value_module_name: "value_module"
+rollout_timeout: 999999

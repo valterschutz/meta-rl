@@ -1,5 +1,5 @@
 import argparse
-import json
+import yaml
 from datetime import datetime
 
 import matplotlib.pyplot as plt
@@ -22,6 +22,32 @@ from env import MetaEnv
 from utils import DictWrapper, MethodLogger, calc_return
 
 
+def no_constraints_policy(td):
+    td["action"] = torch.tensor([0.0], dtype=torch.float32, device=td.device)
+    return td
+
+
+def full_constraints_policy(td):
+    td["action"] = torch.tensor([1.0], dtype=torch.float32, device=td.device)
+    return td
+
+
+def halfway_constraints_policy(td):
+    if td["step"] < meta_steps_per_episode // 2:
+        td["action"] = torch.tensor([0.0], dtype=torch.float32, device=td.device)
+    else:
+        td["action"] = torch.tensor([1.0], dtype=torch.float32, device=td.device)
+    return td
+
+
+def random_policy(td):
+    pass
+
+
+def loss_based_policy(td):
+    pass
+
+
 def eval_meta_policy(meta_env, meta_config, base_config, meta_policy, verbose=False):
     pbar = tqdm(total=meta_config["eval_episodes"])
     score = torch.zeros(meta_config["eval_episodes"], dtype=torch.float32)
@@ -42,14 +68,29 @@ def eval_meta_policy(meta_env, meta_config, base_config, meta_policy, verbose=Fa
     return score
 
 
+def evaluate_and_save(policy_name, policy_fn):
+    print(f"Evaluating base agent with {policy_name}...")
+    score = eval_meta_policy(meta_env, meta_config, base_config, policy_fn)
+    path = f"eval_results/{policy_name}_score.pth"
+    torch.save(score, path)
+    print(f"  Results saved to {path}")
+
+
 parser = argparse.ArgumentParser()
+# Config for how to train the base agent
 parser.add_argument("base_config", type=str)
+# Config for how to initialize the meta agent (a bit unnecessary)
 parser.add_argument("meta_config", type=str)
+# Config for which baselines to evaluate
+parser.add_argument("eval_config", type=str)
 args = parser.parse_args()
 with open(args.base_config, "r", encoding="UTF-8") as f:
-    base_config = json.load(f)
+    base_config = yaml.safe_load(f)
 with open(args.meta_config, "r", encoding="UTF-8") as f:
-    meta_config = json.load(f)
+    meta_config = yaml.safe_load(f)
+with open(args.eval_config, "r", encoding="UTF-8") as f:
+    eval_config = yaml.safe_load(f)
+
 
 base_env, base_agent, base_collector_fn = get_base_from_config(DictWrapper(base_config))
 
@@ -93,73 +134,20 @@ meta_agent.reset(
 
 meta_steps_per_episode = base_config["total_frames"] // base_config["batch_size"]
 
-print(f"Evaluating base agent with constraints selected by meta agent...")
-meta_score = eval_meta_policy(meta_env, meta_config, base_config, meta_agent.policy)
+if eval_config["meta"]:
+    evaluate_and_save("meta", meta_agent.policy)
 
+# if eval_config["random_policy"]:
+#     evaluate_and_save("random", random_policy)
 
-def full_constraints_policy(td):
-    td["action"] = torch.tensor([1.0], dtype=torch.float32, device=td.device)
-    return td
+# if eval_config["loss_based_policy"]:
+#     evaluate_and_save("loss_based", loss_based_policy)
 
+if eval_config["never_active"]:
+    evaluate_and_save("never_active", no_constraints_policy)
 
-print(f"Evaluating base agent with constraints fully active...")
-full_constraints_score = eval_meta_policy(
-    meta_env, meta_config, base_config, full_constraints_policy
-)
+if eval_config["always_active"]:
+    evaluate_and_save("always_active", full_constraints_policy)
 
-
-def no_constraints_policy(td):
-    td["action"] = torch.tensor([0.0], dtype=torch.float32, device=td.device)
-    return td
-
-
-print(f"Evaluating base agent with constraints disabled...")
-no_constraints_score = eval_meta_policy(
-    meta_env, meta_config, base_config, no_constraints_policy
-)
-
-
-def halfway_constraints_policy(td):
-    if td["step"] < meta_steps_per_episode // 2:
-        td["action"] = torch.tensor([0.0], dtype=torch.float32, device=td.device)
-    else:
-        td["action"] = torch.tensor([1.0], dtype=torch.float32, device=td.device)
-    return td
-
-
-print(f"Evaluating base agent with constraints activated at halfway...")
-halfway_constraints_score = eval_meta_policy(
-    meta_env, meta_config, base_config, halfway_constraints_policy
-)
-print(f"{len(halfway_constraints_score)=}")
-
-# Concatenate tensors along the first dimension (axis 0)
-score_tensor = torch.cat(
-    [
-        meta_score,
-        full_constraints_score,
-        no_constraints_score,
-        halfway_constraints_score,
-    ]
-)
-# Convert the score tensor to a list for DataFrame compatibility
-score_list = score_tensor.tolist()
-
-# Corresponding agent labels
-agent_labels = (
-    ["Meta Agent"] * len(meta_score)
-    + ["Full Constraints"] * len(full_constraints_score)
-    + ["No Constraints"] * len(no_constraints_score)
-    + ["Halfway Constraints"] * len(halfway_constraints_score)
-)
-
-# Create DataFrame
-data = pd.DataFrame({"Score": score_list, "Agent": agent_labels})
-
-# Plot beeswarm plot
-plt.figure(figsize=(10, 6))
-sns.swarmplot(x="Score", y="Agent", data=data, size=8)
-plt.title("True Return Distribution")
-plt.xlabel("True Return")
-plt.ylabel("Agent")
-plt.show()
+if eval_config["halfway"]:
+    evaluate_and_save("halfway", halfway_constraints_policy)

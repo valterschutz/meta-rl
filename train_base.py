@@ -14,6 +14,7 @@ import wandb
 from agents import ValueIterationAgent, fast_policy, slow_policy
 from base import get_base_from_config, print_base_rollout
 from utils import calc_return, DictWrapper
+import yaml
 
 
 def train_base(config, interactive=None):
@@ -117,9 +118,9 @@ def train_base(config, interactive=None):
 
 
 if __name__ == "__main__":
-    # Treat first argument of program as path to JSON file with config
+    # Treat first argument of program as path to YAML file with config
     with open(sys.argv[1], encoding="UTF-8") as f:
-        config = json.load(f)
+        config = yaml.safe_load(f)
 
     wandb.init(
         project="toy-base-train",
