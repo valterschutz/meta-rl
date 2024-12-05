@@ -108,6 +108,7 @@ for i in range(meta_config["train_episodes"]):
         meta_td = step_mdp(meta_td)
 
 # Save meta agent
+print(f"Saving meta agent to models/{meta_config['policy_module_name']}.pth")
 torch.save(
     meta_agent.policy_module.state_dict(),
     f"models/{meta_config['policy_module_name']}.pth",

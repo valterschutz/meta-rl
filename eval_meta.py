@@ -35,9 +35,9 @@ def eval_meta_policy(meta_env, meta_config, base_config, meta_policy, verbose=Fa
             )
         # If verbose, print out all the true rewards
         if verbose:
-            print(base_td["true_reward"])
+            print(base_td["next", "true_reward"])
         # Calculate true return experienced by base agent
-        score[i] = calc_return(base_td["true_reward"], base_config["gamma"])
+        score[i] = calc_return(base_td["next", "true_reward"], base_config["gamma"])
         pbar.update(1)
     return score
 
@@ -95,7 +95,6 @@ meta_steps_per_episode = base_config["total_frames"] // base_config["batch_size"
 
 print(f"Evaluating base agent with constraints selected by meta agent...")
 meta_score = eval_meta_policy(meta_env, meta_config, base_config, meta_agent.policy)
-print(f"{len(meta_score)=}")
 
 
 def full_constraints_policy(td):
@@ -107,7 +106,6 @@ print(f"Evaluating base agent with constraints fully active...")
 full_constraints_score = eval_meta_policy(
     meta_env, meta_config, base_config, full_constraints_policy
 )
-print(f"{len(full_constraints_score)=}")
 
 
 def no_constraints_policy(td):
@@ -119,7 +117,6 @@ print(f"Evaluating base agent with constraints disabled...")
 no_constraints_score = eval_meta_policy(
     meta_env, meta_config, base_config, no_constraints_policy
 )
-print(f"{len(no_constraints_score)=}")
 
 
 def halfway_constraints_policy(td):
@@ -135,12 +132,6 @@ halfway_constraints_score = eval_meta_policy(
     meta_env, meta_config, base_config, halfway_constraints_policy
 )
 print(f"{len(halfway_constraints_score)=}")
-
-# Check the length of each list again before concatenating
-print("Meta Agent Length:", len(meta_score))
-print("Full Constraints Length:", len(full_constraints_score))
-print("No Constraints Length:", len(no_constraints_score))
-print("Halfway Constraints Length:", len(halfway_constraints_score))
 
 # Concatenate tensors along the first dimension (axis 0)
 score_tensor = torch.cat(

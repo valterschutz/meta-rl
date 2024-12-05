@@ -7,7 +7,7 @@
     "clip_epsilon": 0.2,
     "use_entropy": false,
     "train_episodes": 2,
-    "eval_episodes": 10,
+    "eval_episodes": 3,
     "device": "cpu",
     "policy_module_name": "policy_module",
     "value_module_name": "value_module",
