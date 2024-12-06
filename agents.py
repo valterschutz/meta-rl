@@ -134,8 +134,7 @@ class PPOAgent(ABC):
         losses_entropy = []
         for i in range(self.num_optim_epochs):
             self.advantage_module(td)
-            self.replay_buffer.extend(td.clone())
-            # fail
+            self.replay_buffer.extend(td.clone().detach())  # Detach before extending
             for j in range(times_to_sample):
                 sub_base_td = self.replay_buffer.sample(self.sub_batch_size)
 
@@ -229,19 +228,24 @@ class BaseAgent(PPOAgent):
 
 
 class MetaPolicyNet(nn.Module):
-    def __init__(self, hidden_units, n_states, n_actions, device):
+    def __init__(self, hidden_units, n_states, n_outputs, device):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(n_states, hidden_units),
             nn.Tanh(),
             nn.Linear(hidden_units, hidden_units),
             nn.Tanh(),
-            nn.Linear(hidden_units, n_actions),
+            nn.Linear(hidden_units, n_outputs),
+            nn.Sigmoid(),
+            # nn.ReLU(),  # If using Beta distribution
+            # NormalParamExtractor(),
         ).to(device)
 
-    # def forward(self, base_mean_reward, base_std_reward, last_action):
     def forward(self, *args):
-        # Concatenate the inputs
+        # def forward(self, base_mean_reward, base_std_reward, last_action, step):
+        # x = torch.cat(
+        #     (base_mean_reward, base_std_reward, last_action, step), dim=-1
+        # ).clone()
         x = torch.cat(args, dim=-1)
         return self.net(x)
 
@@ -258,34 +262,44 @@ class MetaValueNet(nn.Module):
         ).to(device)
 
     def forward(self, *args):
-        # Concatenate the inputs
         x = torch.cat(args, dim=-1)
         return self.net(x)
 
+    # def forward(self, x):
+    #     return self.net(x)
+
 
 class MetaAgent(PPOAgent):
-
     def __init__(self, hidden_units, **kwargs):
         self.hidden_units = hidden_units
         super().__init__(**kwargs)
 
     def initialize_policy(self, mode: str):
-        policy_net = MetaPolicyNet(
-            hidden_units=self.hidden_units, n_states=4, n_actions=1, device=self.device
-        ).to(self.device)
+        # policy_net = MetaPolicyNet(
+        #     hidden_units=self.hidden_units, n_states=4, n_outputs=1, device=self.device
+        # ).to(self.device)
+        policy_net = nn.Sequential(
+            nn.Linear(1, 1),
+            nn.Sigmoid(),
+        )
         policy_module = TensorDictModule(
             policy_net,
-            in_keys=["base_mean_reward", "base_std_reward", "last_action", "step"],
-            # in_keys=["step"],
-            out_keys=["logits"],
+            # in_keys=["base_mean_reward", "base_std_reward", "last_action", "step"],
+            in_keys=["step"],
+            # out_keys=["logits"],
+            out_keys=["loc"],
         )
         policy_module = ProbabilisticActor(
             module=policy_module,
             spec=self.action_spec,
-            in_keys=["logits"],
+            # in_keys=["logits"],
+            in_keys=["loc"],
             return_log_prob=True,
-            default_interaction_type=InteractionType.RANDOM,
-            distribution_class=torch.distributions.bernoulli.Bernoulli,
+            default_interaction_type=InteractionType.MODE,
+            distribution_class=TruncatedNormal,
+            distribution_kwargs={"scale": torch.tensor([0.1])},
+            # distribution_class=torch.distributions.bernoulli.Bernoulli,
+            # distribution_class=torch.distributions.normal.Normal,
         )
 
         return policy_module
@@ -297,14 +311,13 @@ class MetaAgent(PPOAgent):
         value_module = ValueOperator(
             value_net,
             in_keys=["base_mean_reward", "base_std_reward", "last_action", "step"],
-            # in_keys=["step"],
             out_keys=["state_value"],
         )
 
         return value_module
 
     def policy(self, td):
-        # Policy is deterministic
+        # td = td.clone()  # Ensure no in-place modifications
         return self.policy_module(td)
 
 
