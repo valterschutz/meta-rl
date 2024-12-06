@@ -5,7 +5,7 @@ lmbda: 0.5
 hidden_units: 32
 clip_epsilon: 0.2
 use_entropy: false
-train_episodes: 2
+train_episodes: 100
 eval_episodes: 3
 device: "cpu"
 policy_module_name: "policy_module"

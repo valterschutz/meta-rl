@@ -75,38 +75,47 @@ wandb.init(
     },
 )
 
-for i in range(meta_config["train_episodes"]):
-    meta_td = meta_env.reset()  # Resets base agent in meta environment
-    for j in range(meta_steps_per_episode):
-        meta_td = meta_agent.policy(meta_td)
-        meta_td = meta_env.step(meta_td)
-        meta_losses, meta_max_grad = meta_agent.process_batch(meta_td.unsqueeze(0))
-        pbar.update(meta_td.numel())
-        wandb.log(
-            {
-                "step": j,
-                "base_mean_reward": meta_td["base_mean_reward"].item(),
-                "base_std_reward": meta_td["base_std_reward"].item(),
-                "last_action": meta_td["last_action"].item(),
-                "action": meta_td["action"].item(),
-                "meta reward": meta_td["next", "reward"].item(),
-                "meta loss_objective": meta_losses["loss_objective"].item(),
-                "meta loss_critic": meta_losses["loss_critic"].item(),
-                "meta loss_entropy": meta_losses["loss_entropy"].item(),
-                "meta max_grad_norm": meta_max_grad,
-                "base loss_objective": meta_td[
-                    "base", "losses", "loss_objective"
-                ].item(),
-                "base loss_critic": meta_td["base", "losses", "loss_critic"].item(),
-                "base loss_entropy": meta_td["base", "losses", "loss_entropy"].item(),
-                "base state distribution": wandb.Histogram(meta_td["base", "states"]),
-                "base reward distribution": wandb.Histogram(meta_td["base", "rewards"]),
-                "base true_reward distribution": wandb.Histogram(
-                    meta_td["base", "true_rewards"]
-                ),
-            }
-        )
-        meta_td = step_mdp(meta_td)
+try:
+    for i in range(meta_config["train_episodes"]):
+        meta_td = meta_env.reset()  # Resets base agent in meta environment
+        for j in range(meta_steps_per_episode):
+            meta_td = meta_agent.policy(meta_td)
+            meta_td = meta_env.step(meta_td)
+            meta_losses, meta_max_grad = meta_agent.process_batch(meta_td.unsqueeze(0))
+            pbar.update(meta_td.numel())
+            wandb.log(
+                {
+                    "step": j,
+                    "base_mean_reward": meta_td["base_mean_reward"].item(),
+                    "base_std_reward": meta_td["base_std_reward"].item(),
+                    "last_action": meta_td["last_action"].item(),
+                    "action": meta_td["action"].item(),
+                    "meta reward": meta_td["next", "reward"].item(),
+                    "meta loss_objective": meta_losses["loss_objective"].item(),
+                    "meta loss_critic": meta_losses["loss_critic"].item(),
+                    "meta loss_entropy": meta_losses["loss_entropy"].item(),
+                    "meta max_grad_norm": meta_max_grad,
+                    "base loss_objective": meta_td[
+                        "base", "losses", "loss_objective"
+                    ].item(),
+                    "base loss_critic": meta_td["base", "losses", "loss_critic"].item(),
+                    "base loss_entropy": meta_td[
+                        "base", "losses", "loss_entropy"
+                    ].item(),
+                    "base state distribution": wandb.Histogram(
+                        meta_td["base", "states"]
+                    ),
+                    "base reward distribution": wandb.Histogram(
+                        meta_td["base", "rewards"]
+                    ),
+                    "base true_reward distribution": wandb.Histogram(
+                        meta_td["base", "true_rewards"]
+                    ),
+                }
+            )
+            meta_td = step_mdp(meta_td)
+except KeyboardInterrupt:
+    print("Training interrupted.")
 
 # Save meta agent
 print(f"Saving meta agent to models/{meta_config['policy_module_name']}.pth")
