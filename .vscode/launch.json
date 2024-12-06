@@ -15,6 +15,17 @@
             ],
             "console": "integratedTerminal",
             "justMyCode": false
+        },
+        {
+            "name": "Base debugger",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "args": [
+                "configs/base_config.yaml",
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false
         }
     ]
 }

@@ -49,8 +49,7 @@ def get_base_from_config(config):
         lr=config.lr,
         gamma=config.gamma,
         lmbda=config.lmbda,
-        clip_epsilon=config.clip_epsilon,
-        use_entropy=config.use_entropy,
+        hidden_units=config.hidden_units,
     )
 
     collector_fn = lambda: SyncDataCollector(

@@ -9,10 +9,22 @@ from typing import Optional
 from tensordict.nn import InteractionType
 
 
-from torchrl.modules.tensordict_module import ProbabilisticActor, ValueOperator
+from torchrl.modules.tensordict_module import (
+    ProbabilisticActor,
+    ValueOperator,
+    ActorCriticOperator,
+    SafeModule,
+)
 from torchrl.data.replay_buffers import LazyTensorStorage, SamplerWithoutReplacement
 from torchrl.data import Categorical, Binary, UnboundedContinuous, ReplayBuffer
-from torchrl.objectives import ClipPPOLoss, A2CLoss, DDPGLoss
+from torchrl.objectives import (
+    ClipPPOLoss,
+    A2CLoss,
+    DDPGLoss,
+    SACLoss,
+    DiscreteSACLoss,
+    ValueEstimators,
+)
 from torchrl.objectives.value import GAE
 
 # from torchrl.modules import IndependentNormal
@@ -26,8 +38,10 @@ from torchrl.modules import TruncatedNormal
 
 import wandb
 
+from networks import MetaPolicyNet, MetaQValueNet, MetaValueNet
 
-class PPOAgent(ABC):
+
+class MetaAgent:
     def __init__(
         self,
         state_spec,
@@ -40,8 +54,7 @@ class PPOAgent(ABC):
         lr,
         gamma,
         lmbda,
-        clip_epsilon,
-        use_entropy,
+        hidden_units,
         policy_module_state_dict=None,
         value_module_state_dict=None,
         mode="train",
@@ -59,18 +72,12 @@ class PPOAgent(ABC):
         self.gamma = gamma
         self.lmbda = lmbda
 
-        self.clip_epsilon = clip_epsilon
-        self.use_entropy = use_entropy
+        self.hidden_units = hidden_units
 
         self.replay_buffer = ReplayBuffer(
             storage=LazyTensorStorage(max_size=self.buffer_size, device=self.device),
             sampler=SamplerWithoutReplacement(),
         )
-
-        # Variables expected to be set by subclasses
-        # self.policy
-        # self.value_module
-        # self.advantage_module
 
         self.reset(
             mode=mode,
@@ -78,32 +85,84 @@ class PPOAgent(ABC):
             value_module_state_dict=value_module_state_dict,
         )
 
-    @abstractmethod
-    def initialize_policy(self, mode: str):
-        """Expected to return `self.policy_module`."""
+    def initialize_policy(self):
+        policy_net = MetaPolicyNet(
+            hidden_units=self.hidden_units, n_states=4, n_outputs=1, device=self.device
+        ).to(self.device)
+        policy_module = TensorDictModule(
+            policy_net,
+            in_keys=["base_mean_reward", "base_std_reward", "last_action", "step"],
+            out_keys=["loc"],
+        )
+        policy_module = ProbabilisticActor(
+            module=policy_module,
+            spec=self.action_spec,
+            in_keys=["loc"],
+            return_log_prob=True,
+            default_interaction_type=InteractionType.MODE,
+            distribution_class=TruncatedNormal,
+            distribution_kwargs={"scale": torch.tensor([0.1])},
+        )
 
-    @abstractmethod
-    def initialize_critic(self, mode: str):
-        """Expected to return `self.value_module` and `self.advantage_module`."""
+        return policy_module
 
-    @abstractmethod
-    def policy(self, td):
-        """Expected to fill the action key of the input tensor dictionary."""
+    def initialize_qvalue(self):
+        n_actions = self.action_spec.n
+        qvalue_net = MetaQValueNet(
+            hidden_units=self.hidden_units,
+            n_states=4,
+            n_actions=n_actions,
+            device=self.device,
+        ).to(self.device)
+        qvalue_module = ValueOperator(
+            qvalue_net,
+            in_keys=[
+                "base_mean_reward",
+                "base_std_reward",
+                "last_action",
+                "step",
+                "action",
+            ],
+            out_keys=["state_action_value"],
+        )
+
+        return qvalue_module
+
+    def initialize_value(self):
+        value_net = MetaValueNet(
+            hidden_units=self.hidden_units, n_states=4, device=self.device
+        ).to(self.device)
+        value_module = ValueOperator(
+            value_net,
+            in_keys=["base_mean_reward", "base_std_reward", "last_action", "step"],
+            out_keys=["state_value"],
+        )
+
+        return value_module
 
     def reset(
-        self, mode: str, policy_module_state_dict=None, value_module_state_dict=None
+        self,
+        mode: str,
+        policy_module_state_dict=None,
+        qvalue_module_state_dict=None,
+        value_module_state_dict=None,
     ):
-        self.policy_module = self.initialize_policy(mode=mode)
+        self.policy_module = self.initialize_policy()
         if policy_module_state_dict is not None:
             self.policy_module.load_state_dict(policy_module_state_dict)
-        self.value_module = self.initialize_critic(mode=mode)
+        self.qvalue_module = self.initialize_qvalue()
+        if qvalue_module_state_dict is not None:
+            self.qvalue_module.load_state_dict(qvalue_module_state_dict)
+        self.value_module = self.initialize_value()
         if value_module_state_dict is not None:
             self.value_module.load_state_dict(value_module_state_dict)
         if mode == "train":
             self.policy_module.train()
+            self.qvalue_module.train()
             self.value_module.train()
         elif mode == "eval":
             self.policy_module.eval()
+            self.qvalue_module.eval()
             self.value_module.eval()
         else:
             raise ValueError(f"Unknown mode: {mode}")
@@ -112,14 +171,16 @@ class PPOAgent(ABC):
             lmbda=self.lmbda,
             value_network=self.value_module,
         )
-        self.loss_module = ClipPPOLoss(
+        self.loss_module = SACLoss(
             actor_network=self.policy_module,
-            critic_network=self.value_module,
-            clip_epsilon=self.clip_epsilon,
-            entropy_bonus=self.use_entropy,
+            qvalue_network=self.qvalue_module,
+            value_network=self.value_module,
         )
         self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
         self.replay_buffer.empty()
+
+    def policy(self, td):
+        return self.policy_module(td)
 
     def process_batch(self, td, verbose=False):
         # Detach sample_log_prob and action from the graph. TODO: understand why
@@ -140,10 +201,11 @@ class PPOAgent(ABC):
 
                 self.optim.zero_grad()
                 loss_td = self.loss_module(sub_base_td)
+                fail  # Check which losses are available
                 loss = (
                     loss_td["loss_objective"]
                     + loss_td["loss_critic"]
-                    + (0 if not self.use_entropy else loss_td["loss_entropy"])
+                    # + (0 if not self.use_entropy else loss_td["loss_entropy"])
                 )
                 losses_objective.append(loss_td["loss_objective"].mean().item())
                 losses_critic.append(loss_td["loss_critic"].mean().item())
@@ -180,26 +242,73 @@ class PPOAgent(ABC):
         return losses, max_grad_norm
 
 
-class BaseAgent(PPOAgent):
+class BaseAgent:
     def __init__(
         self,
-        **kwargs,
+        state_spec,
+        action_spec,
+        num_optim_epochs,
+        buffer_size,
+        sub_batch_size,
+        device,
+        max_grad_norm,
+        lr,
+        gamma,
+        lmbda,
+        hidden_units,
+        actor_critic_module_state_dict=None,
+        mode="train",
     ):
-        # We expect state_spec and action_spec to both be catogorical
-        super().__init__(**kwargs)
 
-    def initialize_policy(self, mode: str):
+        self.state_spec = state_spec
+        self.action_spec = action_spec
+
+        self.buffer_size = buffer_size
+        self.num_optim_epochs = num_optim_epochs
+        self.sub_batch_size = sub_batch_size
+        self.device = device
+        self.max_grad_norm = max_grad_norm
+        self.lr = lr
+        self.gamma = gamma
+        self.lmbda = lmbda
+        self.hidden_units = hidden_units
+
+        self.replay_buffer = ReplayBuffer(
+            storage=LazyTensorStorage(max_size=self.buffer_size, device=self.device),
+            sampler=SamplerWithoutReplacement(),
+        )
+
+        self.reset(
+            mode=mode,
+            actor_critic_module_state_dict=actor_critic_module_state_dict,
+        )
+
+    def reset(
+        self,
+        mode: str,
+        actor_critic_module_state_dict=None,
+    ):
         n_states = self.state_spec["state"].n
         n_actions = self.action_spec.n
 
-        actor_net = nn.Sequential(
+        # Common hidden network for both policy and critic
+        hidden_net = nn.Sequential(
             OneHotLayer(num_classes=n_states),
-            nn.Linear(n_states, n_actions),
+            nn.Linear(n_states, self.hidden_units),
+            nn.ReLU(),
+            nn.Linear(self.hidden_units, self.hidden_units),
+        ).to(self.device)
+        # hidden_module = SafeModule(hidden_net, in_keys=["state"], out_keys=["hidden"])
+
+        # Policy head
+        actor_net = nn.Sequential(
+            hidden_net,
+            nn.Linear(self.hidden_units, n_actions),
         ).to(self.device)
         policy_module = TensorDictModule(
             actor_net, in_keys=["state"], out_keys=["logits"]
         )
-        policy_module = ProbabilisticActor(
+        self.policy_module = ProbabilisticActor(
             module=policy_module,
             spec=self.action_spec,
             in_keys=["logits"],
@@ -208,115 +317,118 @@ class BaseAgent(PPOAgent):
             return_log_prob=True,
         )
 
-        return policy_module
-
-    def initialize_critic(self, mode: str):
-        n_states = self.state_spec["state"].n
-
-        value_net = nn.Sequential(
-            OneHotLayer(num_classes=n_states),
-            nn.Linear(n_states, 1),
+        # Action value head
+        qvalue_net = nn.Sequential(
+            hidden_net,
+            nn.Linear(self.hidden_units, n_actions),
         ).to(self.device)
-        value_module = ValueOperator(
+        self.qvalue_module = ValueOperator(
+            qvalue_net, in_keys=["state"], out_keys=["action_value"]
+        )
+
+        # State value head, necessary for GAE
+        value_net = nn.Sequential(
+            hidden_net,
+            nn.Linear(self.hidden_units, 1),
+        ).to(self.device)
+        self.value_module = ValueOperator(
             value_net, in_keys=["state"], out_keys=["state_value"]
         )
 
-        return value_module
+        # TODO: load state dict
+        # if actor_critic_module_state_dict is not None:
+        #     self.combined_module.load_state_dict(actor_critic_module_state_dict)
+
+        # self.value_module = self.actor_critic_module.get_value_operator()
+
+        if mode == "train":
+            # self.value_module.train()
+            self.policy_module.train()
+            self.qvalue_module.train()
+        elif mode == "eval":
+            # self.value_module.eval()
+            self.policy_module.eval()
+            self.qvalue_module.eval()
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
+
+        self.advantage_module = GAE(
+            gamma=self.gamma,
+            lmbda=self.lmbda,
+            value_network=self.value_module,
+        )
+
+        self.loss_module = DiscreteSACLoss(
+            actor_network=self.policy_module,
+            qvalue_network=self.qvalue_module,
+            action_space=self.action_spec,
+            num_actions=self.action_spec.n,
+        )
+        self.loss_module.make_value_estimator(
+            ValueEstimators.TDLambda, gamma=self.gamma, lmbda=self.lmbda
+        )  # Que?
+        self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
+        self.replay_buffer.empty()
 
     def policy(self, td):
         return self.policy_module(td)
 
+    def process_batch(self, td, verbose=False):
+        # Detach sample_log_prob and action from the graph. TODO: understand why
+        td["sample_log_prob"] = td["sample_log_prob"].detach()
+        td["action"] = td["action"].detach()
 
-class MetaPolicyNet(nn.Module):
-    def __init__(self, hidden_units, n_states, n_outputs, device):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(n_states, hidden_units),
-            # nn.Tanh(),
-            nn.ReLU(),
-            nn.Linear(hidden_units, n_outputs),
-            nn.Sigmoid(),
-            # nn.ReLU(),  # If using Beta distribution
-            # NormalParamExtractor(),
-        ).to(device)
+        # Process a single batch of data and return losses and maximum grad norm
+        times_to_sample = len(td) // self.sub_batch_size
+        max_grad_norm = 0
+        losses_alpha = []
+        losses_actor = []
+        losses_qvalue = []
+        for i in range(self.num_optim_epochs):
+            self.advantage_module(td)
+            # self.value_estimator(td)
+            self.replay_buffer.extend(td.clone().detach())  # Detach before extending
+            for j in range(times_to_sample):
+                sub_base_td = self.replay_buffer.sample(self.sub_batch_size)
 
-    def forward(self, *args):
-        # def forward(self, base_mean_reward, base_std_reward, last_action, step):
-        # x = torch.cat(
-        #     (base_mean_reward, base_std_reward, last_action, step), dim=-1
-        # ).clone()
-        x = torch.cat(args, dim=-1)
-        return self.net(x)
-
-
-class MetaValueNet(nn.Module):
-    def __init__(self, hidden_units, n_states, device):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(n_states, hidden_units),
-            # nn.Tanh(),
-            nn.ReLU(),
-            nn.Linear(hidden_units, 1),
-        ).to(device)
-
-    def forward(self, *args):
-        x = torch.cat(args, dim=-1)
-        return self.net(x)
-
-    # def forward(self, x):
-    #     return self.net(x)
-
-
-class MetaAgent(PPOAgent):
-    def __init__(self, hidden_units, **kwargs):
-        self.hidden_units = hidden_units
-        super().__init__(**kwargs)
-
-    def initialize_policy(self, mode: str):
-        policy_net = MetaPolicyNet(
-            hidden_units=self.hidden_units, n_states=4, n_outputs=1, device=self.device
-        ).to(self.device)
-        policy_module = TensorDictModule(
-            policy_net,
-            in_keys=["base_mean_reward", "base_std_reward", "last_action", "step"],
-            # in_keys=["base_mean_reward", "base_std_reward", "last_action"],
-            # in_keys=["constant"],
-            # out_keys=["logits"],
-            out_keys=["loc"],
-        )
-        policy_module = ProbabilisticActor(
-            module=policy_module,
-            spec=self.action_spec,
-            # in_keys=["logits"],
-            in_keys=["loc"],
-            return_log_prob=True,
-            default_interaction_type=InteractionType.MODE,
-            distribution_class=TruncatedNormal,
-            distribution_kwargs={"scale": torch.tensor([0.1])},
-            # distribution_class=torch.distributions.bernoulli.Bernoulli,
-            # distribution_class=torch.distributions.normal.Normal,
+                self.optim.zero_grad()
+                loss_td = self.loss_module(sub_base_td)
+                loss = (
+                    loss_td["loss_alpha"]
+                    + loss_td["loss_actor"]
+                    + loss_td["loss_qvalue"]
+                )
+                losses_alpha.append(loss_td["loss_alpha"].mean().item())
+                losses_actor.append(loss_td["loss_actor"].mean().item())
+                losses_qvalue.append(loss_td["loss_qvalue"].mean().item())
+                loss.backward()
+                grad_norm = nn.utils.clip_grad_norm_(
+                    self.loss_module.parameters(), self.max_grad_norm
+                )
+                max_grad_norm = max(grad_norm.item(), max_grad_norm)
+                self.optim.step()
+        losses = TensorDict(
+            {
+                "loss_alpha": torch.tensor(
+                    sum(losses_alpha) / len(losses_alpha),
+                    device=self.device,
+                    dtype=torch.float32,
+                ),
+                "loss_actor": torch.tensor(
+                    sum(losses_actor) / len(losses_actor),
+                    device=self.device,
+                    dtype=torch.float32,
+                ),
+                "loss_qvalue": torch.tensor(
+                    sum(losses_qvalue) / len(losses_qvalue),
+                    device=self.device,
+                    dtype=torch.float32,
+                ),
+            },
+            batch_size=(),
         )
 
-        return policy_module
-
-    def initialize_critic(self, mode: str):
-        value_net = MetaValueNet(
-            hidden_units=self.hidden_units, n_states=4, device=self.device
-        ).to(self.device)
-        value_module = ValueOperator(
-            value_net,
-            in_keys=["base_mean_reward", "base_std_reward", "last_action", "step"],
-            # in_keys=["base_mean_reward", "base_std_reward", "last_action"],
-            # in_keys=["constant"],
-            # in_keys=["step"],
-            out_keys=["state_value"],
-        )
-
-        return value_module
-
-    def policy(self, td):
-        # td = td.clone()  # Ensure no in-place modifications
-        return self.policy_module(td)
+        return losses, max_grad_norm
 
 
 class ValueIterationAgent:
