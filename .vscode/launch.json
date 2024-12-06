@@ -10,8 +10,8 @@
             "request": "launch",
             "program": "${file}",
             "args": [
-                "base_config.json",
-                "meta_config.json"
+                "configs/base_config.yaml",
+                "configs/meta_config.yaml"
             ],
             "console": "integratedTerminal",
             "justMyCode": false

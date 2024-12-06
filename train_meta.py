@@ -75,6 +75,8 @@ wandb.init(
     },
 )
 
+torch.autograd.set_detect_anomaly(True)
+
 try:
     for i in range(meta_config["train_episodes"]):
         meta_td = meta_env.reset()  # Resets base agent in meta environment

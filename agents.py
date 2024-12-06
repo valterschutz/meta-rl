@@ -232,9 +232,8 @@ class MetaPolicyNet(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(n_states, hidden_units),
-            nn.Tanh(),
-            nn.Linear(hidden_units, hidden_units),
-            nn.Tanh(),
+            # nn.Tanh(),
+            nn.ReLU(),
             nn.Linear(hidden_units, n_outputs),
             nn.Sigmoid(),
             # nn.ReLU(),  # If using Beta distribution
@@ -255,9 +254,8 @@ class MetaValueNet(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(n_states, hidden_units),
-            nn.Tanh(),
-            nn.Linear(hidden_units, hidden_units),
-            nn.Tanh(),
+            # nn.Tanh(),
+            nn.ReLU(),
             nn.Linear(hidden_units, 1),
         ).to(device)
 
@@ -275,17 +273,14 @@ class MetaAgent(PPOAgent):
         super().__init__(**kwargs)
 
     def initialize_policy(self, mode: str):
-        # policy_net = MetaPolicyNet(
-        #     hidden_units=self.hidden_units, n_states=4, n_outputs=1, device=self.device
-        # ).to(self.device)
-        policy_net = nn.Sequential(
-            nn.Linear(1, 1),
-            nn.Sigmoid(),
-        )
+        policy_net = MetaPolicyNet(
+            hidden_units=self.hidden_units, n_states=4, n_outputs=1, device=self.device
+        ).to(self.device)
         policy_module = TensorDictModule(
             policy_net,
-            # in_keys=["base_mean_reward", "base_std_reward", "last_action", "step"],
-            in_keys=["step"],
+            in_keys=["base_mean_reward", "base_std_reward", "last_action", "step"],
+            # in_keys=["base_mean_reward", "base_std_reward", "last_action"],
+            # in_keys=["constant"],
             # out_keys=["logits"],
             out_keys=["loc"],
         )
@@ -311,6 +306,9 @@ class MetaAgent(PPOAgent):
         value_module = ValueOperator(
             value_net,
             in_keys=["base_mean_reward", "base_std_reward", "last_action", "step"],
+            # in_keys=["base_mean_reward", "base_std_reward", "last_action"],
+            # in_keys=["constant"],
+            # in_keys=["step"],
             out_keys=["state_value"],
         )
 

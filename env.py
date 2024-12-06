@@ -279,6 +279,8 @@ class BaseEnv(EnvBase):
         self.up_weight = up_weight
 
     def set_constraint_weight(self, weight):
+        # Clip weight to be between 0 and 1
+        weight = max(0, min(weight, 1))
         self.set_left_weight(weight)
         self.set_right_weight(weight)
         self.set_down_weight(weight)
@@ -313,6 +315,7 @@ class MetaEnv(EnvBase):
 
         return TensorDict(
             {
+                "constant": torch.tensor([42.0], dtype=torch.float32),  # For debugging
                 "base_mean_reward": torch.tensor([0.0], dtype=torch.float32),
                 "base_std_reward": torch.tensor([0.0], dtype=torch.float32),
                 "last_action": torch.tensor([0], dtype=torch.float32),
@@ -369,6 +372,7 @@ class MetaEnv(EnvBase):
         base_losses, base_grad_norm = self.base_agent.process_batch(base_td)
         next_meta_td["done"] = not self.is_batches_remaining(self.base_iter)
         next_meta_td["step"] = meta_td["step"] + 1
+        next_meta_td["constant"] = meta_td["constant"]
 
         next_meta_td["base", "states"] = base_td["state"]
         next_meta_td["base", "rewards"] = base_td["next", "reward"]
@@ -388,6 +392,7 @@ class MetaEnv(EnvBase):
 
     def _make_spec(self):
         self.observation_spec = Composite(
+            constant=Unbounded(shape=(1,), dtype=torch.float32),
             # The state
             base_mean_reward=Unbounded(shape=(1,), dtype=torch.float32),
             base_std_reward=Unbounded(shape=(1,), dtype=torch.float32),
@@ -416,6 +421,7 @@ class MetaEnv(EnvBase):
             shape=(),
         )
         self.state_spec = Composite(
+            constant=Unbounded(shape=(1,), dtype=torch.float32),
             base_mean_reward=Unbounded(shape=(1,), dtype=torch.float32),
             base_std_reward=Unbounded(shape=(1,), dtype=torch.float32),
             last_action=Bounded(low=0, high=1, shape=(1,), dtype=torch.float32),

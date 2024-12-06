@@ -10,10 +10,10 @@ num_optim_epochs: 10
 batch_size: 50
 max_grad_norm: 1
 lmbda: 0.5
-total_frames: 2000
+total_frames: 4000
 rollout_timeout: 200
-lr: 0.01
+lr: !!float 1e-2
 clip_epsilon: 0.2
 use_entropy: false
-no_weight_fraction: 0.2
-full_weight_fraction: 0.8
+no_weight_fraction: 0.99
+full_weight_fraction: 1.0
