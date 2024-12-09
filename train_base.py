@@ -70,6 +70,7 @@ def train_base(config, interactive=None):
         if interactive:
             # Slow policy benchmark
             slow_td = env.rollout(config.rollout_timeout, slow_policy)
+            # print_base_rollout(slow_td, config.gamma)
             slow_return = calc_return(slow_td["next", "reward"].flatten(), config.gamma)
             slow_true_return = calc_return(
                 slow_td["true_reward"].flatten(), config.gamma

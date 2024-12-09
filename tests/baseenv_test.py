@@ -1,6 +1,7 @@
 import unittest
 import torch
 from torch import Tensor
+from torchrl.envs.utils import step_mdp
 import logging
 
 from agents import fast_policy, slow_policy
@@ -42,6 +43,66 @@ class TestBaseEnv(unittest.TestCase):
             seed=None,
             device=self.config.device,
         ).to(self.config.device)
+
+    def test_move_horizontally(self):
+        # See if moving sideways is possible and gives expected rewards
+        td = self.env.reset()
+        td["action"] = torch.tensor(
+            [0, 1, 0, 0], device=self.config.device
+        )  # Move right
+        td = self.env.step(td)
+        self.assertTrue(
+            torch.equal(td["next", "state"], torch.tensor(1, device=self.config.device))
+        )
+        self.assertAlmostEqual(
+            td["next", "reward"],
+            torch.tensor(self.x, device=self.config.device),
+            places=3,
+        )
+        td = step_mdp(td)
+
+        td["action"] = torch.tensor(
+            [1, 0, 0, 0], device=self.config.device
+        )  # Move left
+        td = self.env.step(td)
+        self.assertTrue(
+            torch.equal(td["next", "state"], torch.tensor(0, device=self.config.device))
+        )
+        self.assertAlmostEqual(
+            td["next", "reward"],
+            torch.tensor(self.x, device=self.config.device),
+            places=3,
+        )
+
+    def test_move_vertically(self):
+        # See if moving sideways is possible and gives expected rewards
+        td = self.env.reset()
+        td["action"] = torch.tensor(
+            [0, 0, 0, 1], device=self.config.device
+        )  # Move right
+        td = self.env.step(td)
+        self.assertTrue(
+            torch.equal(td["next", "state"], torch.tensor(2, device=self.config.device))
+        )
+        self.assertAlmostEqual(
+            td["next", "reward"],
+            torch.tensor(self.y, device=self.config.device),
+            places=3,
+        )
+        td = step_mdp(td)
+
+        td["action"] = torch.tensor(
+            [0, 0, 1, 0], device=self.config.device
+        )  # Move left
+        td = self.env.step(td)
+        self.assertTrue(
+            torch.equal(td["next", "state"], torch.tensor(0, device=self.config.device))
+        )
+        self.assertAlmostEqual(
+            td["next", "reward"],
+            torch.tensor(self.y, device=self.config.device),
+            places=3,
+        )
 
     def test_returns(self):
         """Check if returns are correct for both slow and fast agents with and without constraints."""

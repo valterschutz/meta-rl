@@ -257,6 +257,7 @@ class BaseAgent:
         gamma,
         hidden_units,
         target_eps,
+        target_entropy,
         actor_critic_module_state_dict=None,
         mode="train",
     ):
@@ -273,11 +274,13 @@ class BaseAgent:
         self.gamma = gamma
         self.hidden_units = hidden_units
         self.target_eps = target_eps
+        self.target_entropy = target_entropy
 
         self.replay_buffer = ReplayBuffer(
             storage=LazyTensorStorage(max_size=self.buffer_size, device=self.device),
             sampler=SamplerWithoutReplacement(),
         )
+        # TODO: try prioritized sampling
 
         self.reset(
             mode=mode,
@@ -365,6 +368,7 @@ class BaseAgent:
             qvalue_network=self.qvalue_module,
             action_space=self.action_spec,
             num_actions=self.action_spec.n,
+            target_entropy=self.target_entropy,
         )
         self.loss_module.make_value_estimator(
             ValueEstimators.TD0, gamma=self.gamma
@@ -488,14 +492,14 @@ class ValueIterationAgent:
 
 def slow_policy(td):
     # Always go right
-    td["action"] = torch.tensor(1, device=td.device)
+    td["action"] = torch.tensor([0, 1, 0, 0], device=td.device)
     return td
 
 
 def fast_policy(td):
     # Always go up in even states, otherwise go right
     if td["state"] % 2 == 0:
-        td["action"] = torch.tensor(3, device=td.device)
+        td["action"] = torch.tensor([0, 0, 0, 1], device=td.device)
     else:
-        td["action"] = torch.tensor(1, device=td.device)
+        td["action"] = torch.tensor([0, 1, 0, 0], device=td.device)
     return td
