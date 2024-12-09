@@ -110,7 +110,6 @@ class BaseEnv(EnvBase):
         punishment=0,
         seed=None,
         device="cpu",
-        # constraints_enabled=False,
         left_weight=1.0,
         right_weight=1.0,
         down_weight=1.0,
@@ -127,7 +126,6 @@ class BaseEnv(EnvBase):
         self.big_reward = big_reward
         self.random_start = random_start
         self.punishment = punishment
-        # self.constraints_enabled = constraints_enabled
         self.left_weight = left_weight
         self.right_weight = right_weight
         self.down_weight = down_weight
@@ -140,13 +138,15 @@ class BaseEnv(EnvBase):
 
     def _make_spec(self):
         self.observation_spec = Composite(
-            state=Categorical(self.n_states, shape=(), dtype=torch.int32),
-            true_reward=UnboundedContinuous(shape=(), dtype=torch.float32),
+            state=OneHot(self.n_states, shape=(self.n_states,), dtype=torch.float32),
+            true_reward=UnboundedContinuous(shape=(1), dtype=torch.float32),
             shape=(),
         )
         self.state_spec = Composite(
-            state=Categorical(self.n_states, shape=(), dtype=torch.int32), shape=()
+            state=OneHot(self.n_states, shape=(self.n_states,), dtype=torch.float32),
+            shape=(),
         )
+
         # self.action_spec = Categorical(4, shape=(), dtype=torch.int32)
         self.action_spec = OneHot(4, shape=(4,), dtype=torch.float32)
         self.reward_spec = UnboundedContinuous(shape=(1,), dtype=torch.float32)
@@ -158,16 +158,19 @@ class BaseEnv(EnvBase):
             shape = td.shape
 
         if self.random_start:
-            state = torch.randint(
-                0, self.n_states, shape=shape, dtype=torch.int32, device=self.device
+            state_indices = torch.randint(
+                0, self.n_states, shape=shape, dtype=torch.long, device=self.device
             )
         else:
-            state = torch.zeros(shape, dtype=torch.int32, device=self.device)
+            state_indices = torch.zeros(shape, dtype=torch.long, device=self.device)
+
+        state = F.one_hot(state_indices, num_classes=self.n_states).to(torch.float32)
+        # print(f"{state=}")
 
         out = TensorDict(
             {
                 "state": state,
-                "true_reward": torch.zeros(state.shape, dtype=torch.float32),
+                "true_reward": torch.zeros(shape, dtype=torch.float32).unsqueeze(-1),
             },
             batch_size=shape,
         )
@@ -181,6 +184,7 @@ class BaseEnv(EnvBase):
         state = td["state"]
         action = td["action"]  # Action order: left, right, down, up
         # x, y, n_pos, big_reward = self.x, self.y, self.n_pos, self.big_reward
+        state = torch.argmax(state, dim=-1)
         action = torch.argmax(action, dim=-1)
 
         next_state = state.clone()
@@ -243,11 +247,14 @@ class BaseEnv(EnvBase):
         # If we reach final pos, we're done
         done = torch.where(next_state == self.n_states - 1, 1.0, done).to(torch.bool)
 
+        # next state should be one-hot
+        next_state = F.one_hot(next_state, num_classes=self.n_states).to(torch.float32)
+
         out = TensorDict(
             {
                 "state": next_state,
                 "reward": reward,
-                "true_reward": true_reward,
+                "true_reward": true_reward.unsqueeze(-1),
                 "done": done,
             },
             td.shape,

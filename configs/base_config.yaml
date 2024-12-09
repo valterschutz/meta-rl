@@ -1,23 +1,34 @@
+device: "cpu"
 
+# How long to train
+total_frames: 1000
+
+# How many frames per batch
+batch_size: 50
+
+# Base environment configuration
 n_states: 20
 return_x: 2
 return_y: 1
 big_reward: 10
-gamma: 0.99
 punishment: 0.0
-device: "cpu"
-num_optim_epochs: 10
-buffer_size: 256
-batch_size: 64
-sub_batch_size: 64
-max_grad_norm: 1
-total_frames: 10000
 rollout_timeout: 200
-lr: !!float 1e-3
+
+# How to switch the constraint
 no_weight_fraction: 0.99
 full_weight_fraction: 1.0
-hidden_units: 20
-target_eps: 0.99
-target_entropy: 0.0
-replay_alpha: 0.7
-replay_beta: 0.5
+
+# Loss hyperparameters
+clip_epsilon: 0.2
+use_entropy: false
+
+# Target network hyperparameters
+gamma: 0.99
+lmbda: 0.5
+
+sub_batch_size: 20
+
+# Optimization hyperparameters
+num_optim_epochs: 10
+lr: !!float 1e-2
+max_grad_norm: 1

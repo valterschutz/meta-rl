@@ -1,13 +1,29 @@
-lr: !!float 1e-2
-max_grad_norm: 10
-gamma: 1
-lmbda: 0.5
-hidden_units: 4
-clip_epsilon: 1
-use_entropy: false
-train_episodes: 1000
-eval_episodes: 10
 device: "cpu"
 policy_module_name: "policy_module"
-value_module_name: "value_module"
+qvalue_module_name: "qvalue_module"
 rollout_timeout: 999999
+
+# How long to train
+train_episodes: 1000
+eval_episodes: 10
+
+# Model hyperparameters
+hidden_units: 4
+
+# Target network hyperparameters
+target_eps: 0.99
+gamma: 1
+
+# Sampling hyperparameters
+buffer_size: 256
+sub_batch_size: 64
+replay_alpha: 0.7
+replay_beta: 0.5
+
+# Loss hyperparameters
+target_entropy: 0.0
+
+# Optimization hyperparameters
+lr: !!float 1e-2
+num_optim_epochs: 10
+max_grad_norm: 10

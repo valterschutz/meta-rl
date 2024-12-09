@@ -48,17 +48,18 @@ check_env_specs(meta_env)
 meta_agent = MetaAgent(
     state_spec=meta_env.state_spec,
     action_spec=meta_env.action_spec,
-    num_optim_epochs=1,
-    buffer_size=1,
-    sub_batch_size=1,
+    num_optim_epochs=meta_config["num_optim_epochs"],
+    buffer_size=meta_config["buffer_size"],
+    sub_batch_size=meta_config["sub_batch_size"],
     device=meta_config["device"],
     max_grad_norm=meta_config["max_grad_norm"],
     lr=meta_config["lr"],
     gamma=meta_config["gamma"],
-    lmbda=meta_config["lmbda"],
-    clip_epsilon=meta_config["clip_epsilon"],
-    use_entropy=meta_config["use_entropy"],
     hidden_units=meta_config["hidden_units"],
+    target_eps=meta_config["target_eps"],
+    target_entropy=meta_config["target_entropy"],
+    replay_alpha=meta_config["replay_alpha"],
+    replay_beta=meta_config["replay_beta"],
 )
 
 meta_steps_per_episode = base_config["total_frames"] // base_config["batch_size"]
@@ -75,7 +76,7 @@ wandb.init(
     },
 )
 
-torch.autograd.set_detect_anomaly(True)
+torch.autograd.set_detect_anomaly(True)  # TODO: remove
 
 try:
     for i in range(meta_config["train_episodes"]):
@@ -126,6 +127,6 @@ torch.save(
     f"models/{meta_config['policy_module_name']}.pth",
 )
 torch.save(
-    meta_agent.value_module.state_dict(),
-    f"models/{meta_config['value_module_name']}.pth",
+    meta_agent.qvalue_module.state_dict(),
+    f"models/{meta_config['qvalue_module_name']}.pth",
 )

@@ -42,17 +42,15 @@ def get_base_from_config(config):
         state_spec=env.state_spec,
         action_spec=env.action_spec,
         num_optim_epochs=config.num_optim_epochs,
-        buffer_size=config.buffer_size,
+        buffer_size=config.batch_size,  # Same as batch_size due to PPO being an on-policy method
         sub_batch_size=config.sub_batch_size,
         device=config.device,
         max_grad_norm=config.max_grad_norm,
         lr=config.lr,
         gamma=config.gamma,
-        hidden_units=config.hidden_units,
-        target_eps=config.target_eps,
-        target_entropy=config.target_entropy,
-        replay_alpha=config.replay_alpha,
-        replay_beta=config.replay_beta,
+        lmbda=config.lmbda,
+        clip_epsilon=config.clip_epsilon,
+        use_entropy=config.use_entropy,
     )
 
     collector_fn = lambda: SyncDataCollector(
