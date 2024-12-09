@@ -24,6 +24,7 @@ from torchrl.objectives import (
     SACLoss,
     DiscreteSACLoss,
     ValueEstimators,
+    SoftUpdate,
 )
 from torchrl.objectives.value import GAE
 
@@ -34,7 +35,7 @@ from utils import OneHotLayer, print_computational_graph
 from tensordict import TensorDict
 from tensordict.nn import TensorDictModule
 from tensordict.nn.distributions import NormalParamExtractor
-from torchrl.modules import TruncatedNormal
+from torchrl.modules import TruncatedNormal, OneHotCategorical
 
 import wandb
 
@@ -254,8 +255,8 @@ class BaseAgent:
         max_grad_norm,
         lr,
         gamma,
-        lmbda,
         hidden_units,
+        target_eps,
         actor_critic_module_state_dict=None,
         mode="train",
     ):
@@ -270,8 +271,8 @@ class BaseAgent:
         self.max_grad_norm = max_grad_norm
         self.lr = lr
         self.gamma = gamma
-        self.lmbda = lmbda
         self.hidden_units = hidden_units
+        self.target_eps = target_eps
 
         self.replay_buffer = ReplayBuffer(
             storage=LazyTensorStorage(max_size=self.buffer_size, device=self.device),
@@ -312,7 +313,8 @@ class BaseAgent:
             module=policy_module,
             spec=self.action_spec,
             in_keys=["logits"],
-            distribution_class=torch.distributions.Categorical,
+            # distribution_class=torch.distributions.Categorical,
+            distribution_class=OneHotCategorical,
             default_interaction_type=InteractionType.RANDOM,
             return_log_prob=True,
         )
@@ -352,11 +354,11 @@ class BaseAgent:
         else:
             raise ValueError(f"Unknown mode: {mode}")
 
-        self.advantage_module = GAE(
-            gamma=self.gamma,
-            lmbda=self.lmbda,
-            value_network=self.value_module,
-        )
+        # self.advantage_module = GAE(
+        #     gamma=self.gamma,
+        #     lmbda=self.lmbda,
+        #     value_network=self.value_module,
+        # )
 
         self.loss_module = DiscreteSACLoss(
             actor_network=self.policy_module,
@@ -365,9 +367,10 @@ class BaseAgent:
             num_actions=self.action_spec.n,
         )
         self.loss_module.make_value_estimator(
-            ValueEstimators.TDLambda, gamma=self.gamma, lmbda=self.lmbda
+            ValueEstimators.TD0, gamma=self.gamma
         )  # Que?
         self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
+        self.target_updater = SoftUpdate(self.loss_module, eps=self.target_eps)
         self.replay_buffer.empty()
 
     def policy(self, td):
@@ -379,34 +382,32 @@ class BaseAgent:
         td["action"] = td["action"].detach()
 
         # Process a single batch of data and return losses and maximum grad norm
-        times_to_sample = len(td) // self.sub_batch_size
+        # times_to_sample = len(td) // self.sub_batch_size
         max_grad_norm = 0
         losses_alpha = []
         losses_actor = []
         losses_qvalue = []
+        self.replay_buffer.extend(td.clone().detach())  # Detach before extending
         for i in range(self.num_optim_epochs):
-            self.advantage_module(td)
             # self.value_estimator(td)
-            self.replay_buffer.extend(td.clone().detach())  # Detach before extending
-            for j in range(times_to_sample):
-                sub_base_td = self.replay_buffer.sample(self.sub_batch_size)
+            sub_base_td = self.replay_buffer.sample(self.sub_batch_size)
+            # self.advantage_module(sub_base_td)
 
-                self.optim.zero_grad()
-                loss_td = self.loss_module(sub_base_td)
-                loss = (
-                    loss_td["loss_alpha"]
-                    + loss_td["loss_actor"]
-                    + loss_td["loss_qvalue"]
-                )
-                losses_alpha.append(loss_td["loss_alpha"].mean().item())
-                losses_actor.append(loss_td["loss_actor"].mean().item())
-                losses_qvalue.append(loss_td["loss_qvalue"].mean().item())
-                loss.backward()
-                grad_norm = nn.utils.clip_grad_norm_(
-                    self.loss_module.parameters(), self.max_grad_norm
-                )
-                max_grad_norm = max(grad_norm.item(), max_grad_norm)
-                self.optim.step()
+            self.optim.zero_grad()
+            loss_td = self.loss_module(sub_base_td)
+            loss = (
+                loss_td["loss_alpha"] + loss_td["loss_actor"] + loss_td["loss_qvalue"]
+            )
+            losses_alpha.append(loss_td["loss_alpha"].mean().item())
+            losses_actor.append(loss_td["loss_actor"].mean().item())
+            losses_qvalue.append(loss_td["loss_qvalue"].mean().item())
+            loss.backward()
+            grad_norm = nn.utils.clip_grad_norm_(
+                self.loss_module.parameters(), self.max_grad_norm
+            )
+            max_grad_norm = max(grad_norm.item(), max_grad_norm)
+            self.optim.step()
+            self.target_updater.step()
         losses = TensorDict(
             {
                 "loss_alpha": torch.tensor(

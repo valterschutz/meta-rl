@@ -9,10 +9,10 @@ device: "cpu"
 num_optim_epochs: 10
 batch_size: 50
 max_grad_norm: 1
-lmbda: 0.5
-total_frames: 20000
+total_frames: 10000
 rollout_timeout: 200
-lr: !!float 1e-4
+lr: !!float 1e-2
 no_weight_fraction: 0.99
 full_weight_fraction: 1.0
 hidden_units: 20
+target_eps: 0.99

@@ -1,6 +1,6 @@
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 import torch
@@ -65,8 +65,6 @@ def train_base(config, interactive=None):
             eval_td = env.rollout(config.rollout_timeout, agent.policy)
         agent_return = calc_return(eval_td["next", "reward"].flatten(), config.gamma)
         agent_true_return = calc_return(eval_td["true_reward"].flatten(), config.gamma)
-        batch_dissimilarity = (optimal_return - agent_return) / optimal_return
-        return_dissimilarity += batch_dissimilarity
 
         # Additional benchmarks in the interactive case, and also logging
         if interactive:
@@ -113,6 +111,9 @@ def train_base(config, interactive=None):
                     ),
                 }
             )
+        else:  # Not interactive, calculate metrics for hyperparameter sweeps
+            batch_dissimilarity = (optimal_return - agent_return) / optimal_return
+            return_dissimilarity += batch_dissimilarity
         pbar.update(td.numel())
     return return_dissimilarity / n_batches
 
@@ -124,7 +125,7 @@ if __name__ == "__main__":
 
     wandb.init(
         project="toy-base-train",
-        name=f"toy-base-train|{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
+        name=f"toy-base-train|{datetime.now(timezone.utc).strftime('%Y-%m-%d_%H-%M-%S')}",
         config=config,
     )
     train_base(

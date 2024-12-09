@@ -11,10 +11,13 @@ from torchrl.data import (
     Composite,
     Unbounded,
     Categorical,
+    # OneHot,
     UnboundedContinuous,
     UnboundedDiscrete,
     Binary,
 )
+
+from torchrl.data.tensor_specs import OneHot
 from torchrl.envs import (
     EnvBase,
 )
@@ -144,7 +147,8 @@ class BaseEnv(EnvBase):
         self.state_spec = Composite(
             state=Categorical(self.n_states, shape=(), dtype=torch.int32), shape=()
         )
-        self.action_spec = Categorical(4, shape=(), dtype=torch.int32)
+        # self.action_spec = Categorical(4, shape=(), dtype=torch.int32)
+        self.action_spec = OneHot(4, shape=(4,), dtype=torch.float32)
         self.reward_spec = UnboundedContinuous(shape=(1,), dtype=torch.float32)
 
     def _reset(self, td):
@@ -177,6 +181,7 @@ class BaseEnv(EnvBase):
         state = td["state"]
         action = td["action"]  # Action order: left, right, down, up
         # x, y, n_pos, big_reward = self.x, self.y, self.n_pos, self.big_reward
+        action = torch.argmax(action, dim=-1)
 
         next_state = state.clone()
         reward = 0 * torch.ones_like(state, dtype=torch.int)

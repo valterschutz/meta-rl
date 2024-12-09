@@ -48,8 +48,8 @@ def get_base_from_config(config):
         max_grad_norm=config.max_grad_norm,
         lr=config.lr,
         gamma=config.gamma,
-        lmbda=config.lmbda,
         hidden_units=config.hidden_units,
+        target_eps=config.target_eps,
     )
 
     collector_fn = lambda: SyncDataCollector(
