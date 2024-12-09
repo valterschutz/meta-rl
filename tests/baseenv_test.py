@@ -52,7 +52,10 @@ class TestBaseEnv(unittest.TestCase):
         )  # Move right
         td = self.env.step(td)
         self.assertTrue(
-            torch.equal(td["next", "state"], torch.tensor(1, device=self.config.device))
+            torch.equal(
+                td["next", "state"].argmax(dim=-1),
+                torch.tensor(1, device=self.config.device),
+            )
         )
         self.assertAlmostEqual(
             td["next", "reward"],
@@ -66,7 +69,10 @@ class TestBaseEnv(unittest.TestCase):
         )  # Move left
         td = self.env.step(td)
         self.assertTrue(
-            torch.equal(td["next", "state"], torch.tensor(0, device=self.config.device))
+            torch.equal(
+                td["next", "state"].argmax(dim=-1),
+                torch.tensor(0, device=self.config.device),
+            )
         )
         self.assertAlmostEqual(
             td["next", "reward"],
@@ -82,7 +88,10 @@ class TestBaseEnv(unittest.TestCase):
         )  # Move right
         td = self.env.step(td)
         self.assertTrue(
-            torch.equal(td["next", "state"], torch.tensor(2, device=self.config.device))
+            torch.equal(
+                td["next", "state"].argmax(dim=-1),
+                torch.tensor(2, device=self.config.device),
+            )
         )
         self.assertAlmostEqual(
             td["next", "reward"],
@@ -96,7 +105,10 @@ class TestBaseEnv(unittest.TestCase):
         )  # Move left
         td = self.env.step(td)
         self.assertTrue(
-            torch.equal(td["next", "state"], torch.tensor(0, device=self.config.device))
+            torch.equal(
+                td["next", "state"].argmax(dim=-1),
+                torch.tensor(0, device=self.config.device),
+            )
         )
         self.assertAlmostEqual(
             td["next", "reward"],

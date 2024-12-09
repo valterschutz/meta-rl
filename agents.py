@@ -49,7 +49,7 @@ from torchrl.modules import TruncatedNormal, OneHotCategorical
 
 import wandb
 
-from networks import MetaPolicyNet, MetaQValueNet, MetaValueNet
+from networks import MetaPolicyNet, MetaQValueNet
 
 
 class MetaAgent:
@@ -72,6 +72,7 @@ class MetaAgent:
         actor_critic_module_state_dict=None,
         mode="train",
     ):
+        super().__init__()
 
         self.state_spec = state_spec
         self.action_spec = action_spec
@@ -109,8 +110,9 @@ class MetaAgent:
         mode: str,
         actor_critic_module_state_dict=None,
     ):
-        n_states = 5
+        n_states = 3
         n_actions = 1
+        state_keys = ["base_mean_reward", "base_std_reward", "last_action"]
 
         # Common hidden network for both policy and critic
         hidden_net = nn.Sequential(
@@ -120,10 +122,10 @@ class MetaAgent:
         ).to(self.device)
 
         # Policy head
-        actor_net = nn.Sequential(
-            hidden_net, nn.Tanh(), nn.Linear(self.hidden_units, n_actions), nn.Sigmoid()
-        ).to(self.device)
-        policy_module = TensorDictModule(actor_net, in_keys=["state"], out_keys=["loc"])
+        actor_net = MetaPolicyNet(hidden_net, self.hidden_units, n_actions, self.device)
+        policy_module = TensorDictModule(
+            actor_net, in_keys=state_keys, out_keys=["loc"]
+        )
         self.policy_module = ProbabilisticActor(
             module=policy_module,
             spec=self.action_spec,
@@ -135,13 +137,11 @@ class MetaAgent:
         )
 
         # Action value head
-        qvalue_net = nn.Sequential(
-            hidden_net,
-            nn.Tanh(),
-            nn.Linear(self.hidden_units, n_actions),
-        ).to(self.device)
+        qvalue_net = MetaQValueNet(
+            hidden_net, self.hidden_units, n_actions, self.device
+        )
         self.qvalue_module = ValueOperator(
-            qvalue_net, in_keys=["state"], out_keys=["action_value"]
+            qvalue_net, in_keys=state_keys, out_keys=["state_action_value"]
         )
 
         # TODO: load state dict
@@ -251,6 +251,7 @@ class BaseAgent:
         value_module_state_dict=None,
         mode="train",
     ):
+        super().__init__()
 
         self.state_spec = state_spec
         self.action_spec = action_spec

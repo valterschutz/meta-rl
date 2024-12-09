@@ -92,7 +92,9 @@ def train_base(config, interactive=None):
             wandb.log(
                 {
                     "constraint_weight": constraint_weight,
-                    "train state distribution": wandb.Histogram(td["state"]),
+                    "train state distribution": wandb.Histogram(
+                        td["state"].argmax(dim=-1)
+                    ),
                     "train reward distribution": wandb.Histogram(td["next", "reward"]),
                     "loss_critic": losses["loss_critic"].item(),
                     "loss_entropy": losses["loss_entropy"].item(),
@@ -106,7 +108,9 @@ def train_base(config, interactive=None):
                     "eval optimal true return": optimal_true_return,
                     "eval slow true return": slow_true_return,
                     "eval fast true return": fast_true_return,
-                    "eval state distribution": wandb.Histogram(eval_td["state"]),
+                    "eval state distribution": wandb.Histogram(
+                        eval_td["state"].argmax(dim=-1)
+                    ),
                     "eval reward distribution": wandb.Histogram(
                         eval_td["next", "reward"]
                     ),

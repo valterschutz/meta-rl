@@ -16,7 +16,7 @@ gamma: 1
 
 # Sampling hyperparameters
 buffer_size: 256
-sub_batch_size: 64
+sub_batch_size: 32
 replay_alpha: 0.7
 replay_beta: 0.5
 
@@ -24,6 +24,6 @@ replay_beta: 0.5
 target_entropy: 0.0
 
 # Optimization hyperparameters
-lr: !!float 1e-2
+lr: !!float 1e-4
 num_optim_epochs: 10
-max_grad_norm: 10
+max_grad_norm: 1

@@ -94,9 +94,9 @@ try:
                     "last_action": meta_td["last_action"].item(),
                     "action": meta_td["action"].item(),
                     "meta reward": meta_td["next", "reward"].item(),
-                    "meta loss_objective": meta_losses["loss_objective"].item(),
-                    "meta loss_critic": meta_losses["loss_critic"].item(),
-                    "meta loss_entropy": meta_losses["loss_entropy"].item(),
+                    "meta loss_actor": meta_losses["loss_actor"].item(),
+                    "meta loss_alpha": meta_losses["loss_alpha"].item(),
+                    "meta loss_qvalue": meta_losses["loss_qvalue"].item(),
                     "meta max_grad_norm": meta_max_grad,
                     "base loss_objective": meta_td[
                         "base", "losses", "loss_objective"
@@ -106,7 +106,7 @@ try:
                         "base", "losses", "loss_entropy"
                     ].item(),
                     "base state distribution": wandb.Histogram(
-                        meta_td["base", "states"]
+                        meta_td["base", "states"].argmax(dim=-1)
                     ),
                     "base reward distribution": wandb.Histogram(
                         meta_td["base", "rewards"]

@@ -246,7 +246,6 @@ class BaseEnv(EnvBase):
         # If we reach final pos, we're done
         done = torch.where(next_state == self.n_states - 1, 1.0, done).to(torch.bool)
 
-        # next state should be one-hot
         next_state = F.one_hot(next_state, num_classes=self.n_states).to(torch.float32)
 
         out = TensorDict(
@@ -347,12 +346,15 @@ class MetaEnv(EnvBase):
                             batch_size=(),
                         ),
                         "grad_norm": torch.tensor(0.0),
-                        "states": torch.zeros(self.base_batch_size, dtype=torch.int32),
+                        "states": F.one_hot(
+                            torch.zeros(self.base_batch_size, dtype=torch.long),
+                            num_classes=self.base_env.n_states,
+                        ).to(torch.float32),
                         "rewards": torch.zeros(
                             (self.base_batch_size, 1), dtype=torch.float32
                         ),
                         "true_rewards": torch.zeros(
-                            self.base_batch_size, dtype=torch.float32
+                            (self.base_batch_size, 1), dtype=torch.float32
                         ),
                     },
                     batch_size=(),
@@ -416,14 +418,14 @@ class MetaEnv(EnvBase):
                     loss_entropy=Unbounded(shape=(), dtype=torch.float32),
                     batch_size=(),
                 ),
-                states=Categorical(
+                states=OneHot(
                     self.base_env.n_states,
-                    shape=(self.base_batch_size,),
-                    dtype=torch.int32,
+                    shape=(self.base_batch_size, self.base_env.n_states),
+                    dtype=torch.float32,
                 ),
                 rewards=Unbounded(shape=(self.base_batch_size, 1), dtype=torch.float32),
                 true_rewards=Unbounded(
-                    shape=(self.base_batch_size), dtype=torch.float32
+                    shape=(self.base_batch_size, 1), dtype=torch.float32
                 ),
                 grad_norm=Unbounded(shape=(), dtype=torch.float32),
                 batch_size=(),
