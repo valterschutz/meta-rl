@@ -15,8 +15,18 @@ from torchrl.modules.tensordict_module import (
     ActorCriticOperator,
     SafeModule,
 )
-from torchrl.data.replay_buffers import LazyTensorStorage, SamplerWithoutReplacement
-from torchrl.data import Categorical, Binary, UnboundedContinuous, ReplayBuffer
+from torchrl.data.replay_buffers import (
+    LazyTensorStorage,
+    SamplerWithoutReplacement,
+    PrioritizedSampler,
+)
+from torchrl.data import (
+    Categorical,
+    Binary,
+    UnboundedContinuous,
+    ReplayBuffer,
+    TensorDictReplayBuffer,
+)
 from torchrl.objectives import (
     ClipPPOLoss,
     A2CLoss,
@@ -258,6 +268,8 @@ class BaseAgent:
         hidden_units,
         target_eps,
         target_entropy,
+        replay_alpha,
+        replay_beta,
         actor_critic_module_state_dict=None,
         mode="train",
     ):
@@ -275,13 +287,26 @@ class BaseAgent:
         self.hidden_units = hidden_units
         self.target_eps = target_eps
         self.target_entropy = target_entropy
+        self.replay_alpha = replay_alpha
+        self.replay_beta = replay_beta
 
-        self.replay_buffer = ReplayBuffer(
+        # self.replay_buffer = ReplayBuffer(
+        #     storage=LazyTensorStorage(max_size=self.buffer_size, device=self.device),
+        #     # sampler=SamplerWithoutReplacement(),
+        #     sampler=PrioritizedSampler(
+        #         max_capacity=self.buffer_size, alpha=0.7, beta=0.5
+        #     ),
+        # )
+        self.replay_buffer = TensorDictReplayBuffer(
             storage=LazyTensorStorage(max_size=self.buffer_size, device=self.device),
-            sampler=SamplerWithoutReplacement(),
+            sampler=PrioritizedSampler(
+                max_capacity=self.buffer_size,
+                alpha=self.replay_alpha,
+                beta=self.replay_beta,
+            ),
+            priority_key="td_error",
+            batch_size=self.sub_batch_size,
         )
-        # TODO: try prioritized sampling
-
         self.reset(
             mode=mode,
             actor_critic_module_state_dict=actor_critic_module_state_dict,
@@ -394,7 +419,7 @@ class BaseAgent:
         self.replay_buffer.extend(td.clone().detach())  # Detach before extending
         for i in range(self.num_optim_epochs):
             # self.value_estimator(td)
-            sub_base_td = self.replay_buffer.sample(self.sub_batch_size)
+            sub_base_td = self.replay_buffer.sample()
             # self.advantage_module(sub_base_td)
 
             self.optim.zero_grad()
@@ -412,6 +437,8 @@ class BaseAgent:
             max_grad_norm = max(grad_norm.item(), max_grad_norm)
             self.optim.step()
             self.target_updater.step()
+            # Update replay buffer with new priorities
+            self.replay_buffer.update_tensordict_priority(sub_base_td)
         losses = TensorDict(
             {
                 "loss_alpha": torch.tensor(

@@ -7,11 +7,11 @@ gamma: 0.99
 punishment: 0.0
 device: "cpu"
 num_optim_epochs: 10
-buffer_size: 128
-batch_size: 32
-sub_batch_size: 32
+buffer_size: 256
+batch_size: 64
+sub_batch_size: 64
 max_grad_norm: 1
-total_frames: 50000
+total_frames: 10000
 rollout_timeout: 200
 lr: !!float 1e-3
 no_weight_fraction: 0.99
@@ -19,3 +19,5 @@ full_weight_fraction: 1.0
 hidden_units: 20
 target_eps: 0.99
 target_entropy: 0.0
+replay_alpha: 0.7
+replay_beta: 0.5

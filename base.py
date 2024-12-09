@@ -51,6 +51,8 @@ def get_base_from_config(config):
         hidden_units=config.hidden_units,
         target_eps=config.target_eps,
         target_entropy=config.target_entropy,
+        replay_alpha=config.replay_alpha,
+        replay_beta=config.replay_beta,
     )
 
     collector_fn = lambda: SyncDataCollector(
