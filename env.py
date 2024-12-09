@@ -147,7 +147,6 @@ class BaseEnv(EnvBase):
             shape=(),
         )
 
-        # self.action_spec = Categorical(4, shape=(), dtype=torch.int32)
         self.action_spec = OneHot(4, shape=(4,), dtype=torch.float32)
         self.reward_spec = UnboundedContinuous(shape=(1,), dtype=torch.float32)
 

@@ -445,7 +445,9 @@ class ValueIterationAgent:
 
     def policy(self, td):
         action_idx = self.Q[td["state"].argmax(dim=-1)].argmax(dim=-1)
-        td["action"] = F.one_hot(action_idx, num_classes=self.env.action_spec.n)
+        td["action"] = F.one_hot(action_idx, num_classes=self.env.action_spec.n).to(
+            torch.float32
+        )
         return td
 
 
