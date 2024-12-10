@@ -24,6 +24,6 @@ replay_beta: 0.5
 target_entropy: 0.0
 
 # Optimization hyperparameters
-lr: !!float 1e-4
+lr: !!float 1e-6
 num_optim_epochs: 10
 max_grad_norm: 1

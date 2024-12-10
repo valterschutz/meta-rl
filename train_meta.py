@@ -119,11 +119,12 @@ except KeyboardInterrupt:
     print("Training interrupted.")
 
 # Save meta agent
-print(f"Saving meta agent to models/{meta_config['policy_module_name']}.pth")
+print(f"Saving policy module to models/{meta_config['policy_module_name']}.pth")
 torch.save(
     meta_agent.policy_module.state_dict(),
     f"models/{meta_config['policy_module_name']}.pth",
 )
+print(f"Saving qvalue module to models/{meta_config['qvalue_module_name']}.pth")
 torch.save(
     meta_agent.qvalue_module.state_dict(),
     f"models/{meta_config['qvalue_module_name']}.pth",

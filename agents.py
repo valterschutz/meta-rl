@@ -124,15 +124,15 @@ class MetaAgent:
         # Policy head
         actor_net = MetaPolicyNet(hidden_net, self.hidden_units, n_actions, self.device)
         policy_module = TensorDictModule(
-            actor_net, in_keys=state_keys, out_keys=["loc"]
+            actor_net, in_keys=state_keys, out_keys=["loc", "scale"]
         )
         self.policy_module = ProbabilisticActor(
             module=policy_module,
             spec=self.action_spec,
-            in_keys=["loc"],
+            in_keys=["loc", "scale"],
             distribution_class=TruncatedNormal,
-            distribution_kwargs={"scale": torch.tensor([0.1])},
-            default_interaction_type=InteractionType.MODE,
+            distribution_kwargs={"low": 0.0, "high": 1.0},
+            default_interaction_type=InteractionType.RANDOM,
             return_log_prob=True,
         )
 
