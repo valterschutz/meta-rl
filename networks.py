@@ -5,12 +5,19 @@ from tensordict.nn.distributions import NormalParamExtractor
 
 
 class MetaPolicyNet(nn.Module):
-    def __init__(self, hidden_net, hidden_units, n_actions, device):
+    def __init__(self, n_states, hidden_units, device):
         super().__init__()
         self.net = nn.Sequential(
-            hidden_net, nn.Tanh(), nn.Linear(hidden_units, 2 * n_actions)
+            # nn.Linear(n_states, hidden_units),
+            # nn.Tanh(),
+            # nn.Linear(hidden_units, hidden_units),
+            # nn.Tanh(),
+            # nn.Linear(hidden_units, 2),
+            nn.Linear(n_states, 2),
         ).to(device)
-        self.normal_params = NormalParamExtractor()
+        self.normal_params = (
+            NormalParamExtractor()
+        )  # TODO: This seems to add constants to the variance...
 
     def forward(self, *args):
         x = torch.cat(args, dim=-1)
@@ -21,12 +28,15 @@ class MetaPolicyNet(nn.Module):
 
 
 class MetaQValueNet(nn.Module):
-    def __init__(self, hidden_net, hidden_units, n_actions, device):
+    def __init__(self, n_states, hidden_units, device):
         super().__init__()
         self.net = nn.Sequential(
-            hidden_net,
-            nn.Tanh(),
-            nn.Linear(hidden_units, n_actions),
+            # nn.Linear(n_states + 1, hidden_units),
+            # nn.Tanh(),
+            # nn.Linear(hidden_units, hidden_units),
+            # nn.Tanh(),
+            # nn.Linear(hidden_units, 1),
+            nn.Linear(n_states + 1, 1)
         ).to(device)
 
     def forward(self, *args):

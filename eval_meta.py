@@ -63,7 +63,9 @@ def eval_meta_policy(meta_env, meta_config, base_config, meta_policy, verbose=Fa
         if verbose:
             print(base_td["next", "true_reward"])
         # Calculate true return experienced by base agent
-        score[i] = calc_return(base_td["next", "true_reward"], base_config["gamma"])
+        score[i] = calc_return(
+            base_td["next", "true_reward"].flatten(), base_config["gamma"]
+        )
         pbar.update(1)
     return score
 
@@ -108,17 +110,18 @@ check_env_specs(meta_env)
 meta_agent = MetaAgent(
     state_spec=meta_env.state_spec,
     action_spec=meta_env.action_spec,
-    num_optim_epochs=1,
-    buffer_size=1,
-    sub_batch_size=1,
+    num_optim_epochs=meta_config["num_optim_epochs"],
+    buffer_size=meta_config["buffer_size"],
+    sub_batch_size=meta_config["sub_batch_size"],
     device=meta_config["device"],
     max_grad_norm=meta_config["max_grad_norm"],
     lr=meta_config["lr"],
     gamma=meta_config["gamma"],
-    lmbda=meta_config["lmbda"],
-    clip_epsilon=meta_config["clip_epsilon"],
-    use_entropy=meta_config["use_entropy"],
     hidden_units=meta_config["hidden_units"],
+    target_eps=meta_config["target_eps"],
+    target_entropy=meta_config["target_entropy"],
+    replay_alpha=meta_config["replay_alpha"],
+    replay_beta=meta_config["replay_beta"],
 )
 
 # Load saved meta agent
@@ -127,8 +130,8 @@ meta_agent.reset(
     policy_module_state_dict=torch.load(
         f"models/{meta_config['policy_module_name']}.pth"
     ),
-    value_module_state_dict=torch.load(
-        f"models/{meta_config['value_module_name']}.pth"
+    qvalue_module_state_dict=torch.load(
+        f"models/{meta_config['qvalue_module_name']}.pth"
     ),
 )
 

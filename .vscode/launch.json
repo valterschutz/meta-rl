@@ -5,7 +5,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Custom Python debugger",
+            "name": "Meta debugger",
             "type": "debugpy",
             "request": "launch",
             "program": "${file}",

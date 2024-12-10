@@ -69,7 +69,8 @@ class MetaAgent:
         target_entropy,
         replay_alpha,
         replay_beta,
-        actor_critic_module_state_dict=None,
+        policy_module_state_dict=None,
+        qvalue_module_state_dict=None,
         mode="train",
     ):
         super().__init__()
@@ -102,27 +103,22 @@ class MetaAgent:
         )
         self.reset(
             mode=mode,
-            actor_critic_module_state_dict=actor_critic_module_state_dict,
+            policy_module_state_dict=policy_module_state_dict,
+            qvalue_module_state_dict=qvalue_module_state_dict,
         )
 
     def reset(
         self,
         mode: str,
-        actor_critic_module_state_dict=None,
+        policy_module_state_dict=None,
+        qvalue_module_state_dict=None,
     ):
-        n_states = 3
-        n_actions = 1
-        state_keys = ["base_mean_reward", "base_std_reward", "last_action"]
-
-        # Common hidden network for both policy and critic
-        hidden_net = nn.Sequential(
-            nn.Linear(n_states, self.hidden_units),
-            nn.Tanh(),
-            nn.Linear(self.hidden_units, self.hidden_units),
-        ).to(self.device)
+        n_states = 1
+        # state_keys = ["base_mean_reward", "base_std_reward", "last_action", "step"]
+        state_keys = ["step"]
 
         # Policy head
-        actor_net = MetaPolicyNet(hidden_net, self.hidden_units, n_actions, self.device)
+        actor_net = MetaPolicyNet(n_states, self.hidden_units, self.device)
         policy_module = TensorDictModule(
             actor_net, in_keys=state_keys, out_keys=["loc", "scale"]
         )
@@ -135,20 +131,18 @@ class MetaAgent:
             default_interaction_type=InteractionType.RANDOM,
             return_log_prob=True,
         )
+        if policy_module_state_dict is not None:
+            self.policy_module.load_state_dict(policy_module_state_dict)
 
         # Action value head
-        qvalue_net = MetaQValueNet(
-            hidden_net, self.hidden_units, n_actions, self.device
-        )
+        qvalue_net = MetaQValueNet(n_states, self.hidden_units, self.device)
         self.qvalue_module = ValueOperator(
-            qvalue_net, in_keys=state_keys, out_keys=["state_action_value"]
+            qvalue_net,
+            in_keys=(state_keys + ["action"]),
+            out_keys=["state_action_value"],
         )
-
-        # TODO: load state dict
-        # if actor_critic_module_state_dict is not None:
-        #     self.combined_module.load_state_dict(actor_critic_module_state_dict)
-
-        # self.value_module = self.actor_critic_module.get_value_operator()
+        if qvalue_module_state_dict is not None:
+            self.qvalue_module.load_state_dict(qvalue_module_state_dict)
 
         if mode == "train":
             self.policy_module.train()
@@ -163,12 +157,18 @@ class MetaAgent:
             actor_network=self.policy_module,
             qvalue_network=self.qvalue_module,
             target_entropy=self.target_entropy,
+            delay_qvalue=False,  # TODO: turn this on again
         )
         self.loss_module.make_value_estimator(
             ValueEstimators.TD0, gamma=self.gamma
         )  # Que?
         self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
-        self.target_updater = SoftUpdate(self.loss_module, eps=self.target_eps)
+        # self.optim = torch.optim.Adam(
+        #     list(self.policy_module.parameters())
+        #     + list(self.qvalue_module.parameters()),
+        #     lr=self.lr,
+        # )
+        # self.target_updater = SoftUpdate(self.loss_module, eps=self.target_eps)
         self.replay_buffer.empty()
 
     def policy(self, td):
@@ -176,8 +176,8 @@ class MetaAgent:
 
     def process_batch(self, td, verbose=False):
         # Detach sample_log_prob and action from the graph. TODO: understand why
-        td["sample_log_prob"] = td["sample_log_prob"].detach()
-        td["action"] = td["action"].detach()
+        # td["sample_log_prob"] = td["sample_log_prob"].detach()
+        # td["action"] = td["action"].detach()
 
         # Process a single batch of data and return losses and maximum grad norm
         # times_to_sample = len(td) // self.sub_batch_size
@@ -205,7 +205,7 @@ class MetaAgent:
             )
             max_grad_norm = max(grad_norm.item(), max_grad_norm)
             self.optim.step()
-            self.target_updater.step()
+            # self.target_updater.step()
             # Update replay buffer with new priorities
             self.replay_buffer.update_tensordict_priority(sub_base_td)
         losses = TensorDict(
