@@ -15,16 +15,15 @@ target_eps: 0.99
 gamma: 1
 
 # Sampling hyperparameters
-buffer_size: 10_000
+buffer_size: 1_000
 sub_batch_size: 256
 # replay_alpha: 0.7
 replay_alpha: 1.0
 replay_beta: 0.5
 
-# Loss hyperparameters
-target_entropy: 0.0
-
 # Optimization hyperparameters
-lr: !!float 1e-4
+policy_lr: !!float 1e-8
+qvalue_lr: !!float 1e-3
 num_optim_epochs: 10
-max_grad_norm: 1
+max_policy_grad_norm: 1
+max_qvalue_grad_norm: 10

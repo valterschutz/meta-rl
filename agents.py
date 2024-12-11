@@ -61,12 +61,13 @@ class MetaAgent:
         buffer_size,
         sub_batch_size,
         device,
-        max_grad_norm,
-        lr,
+        max_policy_grad_norm,
+        max_qvalue_grad_norm,
+        policy_lr,
+        qvalue_lr,
         gamma,
         hidden_units,
         target_eps,
-        target_entropy,
         replay_alpha,
         replay_beta,
         policy_module_state_dict=None,
@@ -82,12 +83,13 @@ class MetaAgent:
         self.num_optim_epochs = num_optim_epochs
         self.sub_batch_size = sub_batch_size
         self.device = device
-        self.max_grad_norm = max_grad_norm
-        self.lr = lr
+        self.max_policy_grad_norm = max_policy_grad_norm
+        self.max_qvalue_grad_norm = max_qvalue_grad_norm
+        self.policy_lr = policy_lr
+        self.qvalue_lr = qvalue_lr
         self.gamma = gamma
         self.hidden_units = hidden_units
         self.target_eps = target_eps
-        self.target_entropy = target_entropy
         self.replay_alpha = replay_alpha
         self.replay_beta = replay_beta
 
@@ -160,15 +162,12 @@ class MetaAgent:
         self.loss_module.make_value_estimator(
             ValueEstimators.TD0, gamma=self.gamma
         )  # Que?
-        # self.advantage_module = GAE(
-        #     gamma=self.gamma, lmbda=0.95, value_network=self.value_module
-        # )
-        self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
-        # self.actor_optim = torch.optim.Adam(self.policy_module.parameters(), lr=self.lr)
-        # self.value_optim = torch.optim.Adam(self.value_module.parameters(), lr=self.lr)
-        # self.qvalue_optim = torch.optim.Adam(
-        #     self.qvalue_module.parameters(), lr=self.lr
-        # )
+        self.policy_optim = torch.optim.Adam(
+            self.policy_module.parameters(), lr=self.policy_lr
+        )
+        self.qvalue_optim = torch.optim.Adam(
+            self.qvalue_module.parameters(), lr=self.qvalue_lr
+        )
         self.target_updater = SoftUpdate(self.loss_module, eps=self.target_eps)
         self.replay_buffer.empty()
 
@@ -176,29 +175,36 @@ class MetaAgent:
         return self.policy_module(td)
 
     def process_batch(self, td, verbose=False):
-        # Detach sample_log_prob and action from the graph. TODO: understand why
-        # td["sample_log_prob"] = td["sample_log_prob"].detach()
-        # td["action"] = td["action"].detach()
-
         # Process a single batch of data and return losses and maximum grad norm
         # times_to_sample = len(td) // self.sub_batch_size
-        max_grad_norm = 0
-        losses_actor = []
+        max_policy_grad_norm = 0
+        max_qvalue_grad_norm = 0
+        losses_policy = []
         losses_qvalue = []
         self.replay_buffer.extend(td.clone().detach())  # Detach before extending
         for _ in range(self.num_optim_epochs):
             sub_base_td = self.replay_buffer.sample()
             loss_td = self.loss_module(sub_base_td)
-            loss = loss_td["loss_actor"] + loss_td["loss_value"]
-            losses_actor.append(loss_td["loss_actor"].mean().item())
-            losses_qvalue.append(loss_td["loss_value"].mean().item())
-            loss.backward()
-            grad_norm = nn.utils.clip_grad_norm_(
-                self.loss_module.parameters(), self.max_grad_norm
+
+            # Actor loss
+            losses_policy.append(loss_td["loss_actor"].mean().item())
+            loss_td["loss_actor"].backward()
+            policy_grad_norm = nn.utils.clip_grad_norm_(
+                self.policy_module.parameters(), self.max_policy_grad_norm
             )
-            max_grad_norm = max(grad_norm.item(), max_grad_norm)
-            self.optim.step()
-            self.optim.zero_grad()
+            max_policy_grad_norm = max(policy_grad_norm.item(), max_policy_grad_norm)
+            self.policy_optim.step()
+            self.policy_optim.zero_grad()
+
+            # Q-value loss
+            losses_qvalue.append(loss_td["loss_value"].mean().item())
+            loss_td["loss_value"].backward()
+            qvalue_grad_norm = nn.utils.clip_grad_norm_(
+                self.qvalue_module.parameters(), self.max_qvalue_grad_norm
+            )
+            max_qvalue_grad_norm = max(qvalue_grad_norm.item(), max_qvalue_grad_norm)
+            self.qvalue_optim.step()
+            self.qvalue_optim.zero_grad()
 
             # Update replay buffer with new priorities
             self.replay_buffer.update_tensordict_priority(sub_base_td)
@@ -207,7 +213,7 @@ class MetaAgent:
         losses = TensorDict(
             {
                 "loss_actor": torch.tensor(
-                    sum(losses_actor) / len(losses_actor),
+                    sum(losses_policy) / len(losses_policy),
                     device=self.device,
                     dtype=torch.float32,
                 ),
@@ -220,7 +226,7 @@ class MetaAgent:
             batch_size=(),
         )
 
-        return losses, max_grad_norm
+        return losses, max_policy_grad_norm, max_qvalue_grad_norm
 
 
 class BaseAgent:
@@ -330,10 +336,6 @@ class BaseAgent:
         self.replay_buffer.empty()
 
     def process_batch(self, td, verbose=False):
-        # Detach sample_log_prob and action from the graph. TODO: understand why
-        td["sample_log_prob"] = td["sample_log_prob"].detach()
-        td["action"] = td["action"].detach()
-
         # Process a single batch of data and return losses and maximum grad norm
         times_to_sample = len(td) // self.sub_batch_size
         max_grad_norm = 0

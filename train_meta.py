@@ -152,12 +152,13 @@ meta_agent = MetaAgent(
     buffer_size=meta_config["buffer_size"],
     sub_batch_size=meta_config["sub_batch_size"],
     device=meta_config["device"],
-    max_grad_norm=meta_config["max_grad_norm"],
-    lr=meta_config["lr"],
+    max_policy_grad_norm=meta_config["max_policy_grad_norm"],
+    max_qvalue_grad_norm=meta_config["max_qvalue_grad_norm"],
+    policy_lr=meta_config["policy_lr"],
+    qvalue_lr=meta_config["qvalue_lr"],
     gamma=meta_config["gamma"],
     hidden_units=meta_config["hidden_units"],
     target_eps=meta_config["target_eps"],
-    target_entropy=meta_config["target_entropy"],
     replay_alpha=meta_config["replay_alpha"],
     replay_beta=meta_config["replay_beta"],
 )
@@ -178,28 +179,30 @@ wandb.init(
 
 try:
     # For visualizing policy and qvalues
-    step_td, step_action_td, action_ticks, step_ticks = prep_data(
-        meta_steps_per_episode
-    )
+    # step_td, step_action_td, action_ticks, step_ticks = prep_data(
+    #     meta_steps_per_episode
+    # )
     # For logging SSD of params during training
-    old_qvalue_params = get_params(meta_agent.qvalue_module)
-    old_policy_params = get_params(meta_agent.policy_module)
+    # old_qvalue_params = get_params(meta_agent.qvalue_module)
+    # old_policy_params = get_params(meta_agent.policy_module)
 
     for i in range(meta_config["train_episodes"]):
         meta_td = meta_env.reset()  # Resets base agent in meta environment
         for j in range(meta_steps_per_episode):
             meta_td = meta_agent.policy(meta_td)
             meta_td = meta_env.step(meta_td)
-            meta_losses, meta_max_grad = meta_agent.process_batch(meta_td.unsqueeze(0))
+            meta_losses, meta_max_policy_grad_norm, meta_max_qvalue_grad_norm = (
+                meta_agent.process_batch(meta_td.unsqueeze(0))
+            )
+            pbar.update(meta_td.numel())
 
             # TODO: remove after debugging
-            qvalue_params = get_params(meta_agent.qvalue_module)
-            policy_params = get_params(meta_agent.policy_module)
-            qvalue_params_ssd = calc_ssd(old_qvalue_params, qvalue_params)
-            policy_params_ssd = calc_ssd(old_policy_params, policy_params)
-            old_qvalue_params = get_params(meta_agent.qvalue_module)
-            old_policy_params = get_params(meta_agent.policy_module)
-            pbar.update(meta_td.numel())
+            # qvalue_params = get_params(meta_agent.qvalue_module)
+            # policy_params = get_params(meta_agent.policy_module)
+            # qvalue_params_ssd = calc_ssd(old_qvalue_params, qvalue_params)
+            # policy_params_ssd = calc_ssd(old_policy_params, policy_params)
+            # old_qvalue_params = get_params(meta_agent.qvalue_module)
+            # old_policy_params = get_params(meta_agent.policy_module)
 
             # representative_rb_sample = (
             #     meta_agent.replay_buffer.sample()
@@ -208,8 +211,8 @@ try:
             #     len(meta_agent.replay_buffer)
             # )  # TODO: remove when not debugging
             # Visualize policy probabilities and Q-values
-            policy_td = meta_agent.policy_module(step_td)
-            qvalue_td = meta_agent.qvalue_module(step_action_td)
+            # policy_td = meta_agent.policy_module(step_td)
+            # qvalue_td = meta_agent.qvalue_module(step_action_td)
             wandb.log(
                 {
                     "step": j,
@@ -220,7 +223,8 @@ try:
                     "meta reward": meta_td["next", "reward"].item(),
                     "meta loss_actor": meta_losses["loss_actor"].item(),
                     "meta loss_qvalue": meta_losses["loss_qvalue"].item(),
-                    "meta max_grad_norm": meta_max_grad,
+                    "meta max_policy_grad_norm": meta_max_policy_grad_norm,
+                    "meta max_qvalue_grad_norm": meta_max_qvalue_grad_norm,
                     "base loss_objective": meta_td[
                         "base", "losses", "loss_objective"
                     ].item(),
@@ -238,35 +242,35 @@ try:
                         meta_td["base", "true_rewards"]
                     ),
                     # Interesting things to log but which are computationally expensive
-                    "replay buffer size": len(meta_agent.replay_buffer),
-                    "policy loc": wandb.Image(
-                        plot_vector_to_pil(
-                            policy_td["loc"].detach().cpu().numpy(),
-                            "Policy Loc",
-                            "Step",
-                            ticklabels=step_ticks,
-                        )
-                    ),
-                    "policy scale": wandb.Image(
-                        plot_vector_to_pil(
-                            policy_td["scale"].detach().cpu().numpy(),
-                            "Policy Scale",
-                            "Step",
-                            ticklabels=step_ticks,
-                        )
-                    ),
-                    "Q-values": wandb.Image(
-                        plot_to_pil(
-                            qvalue_td["state_action_value"].detach().cpu().numpy(),
-                            "Q-values",
-                            "Step",
-                            "Action",
-                            xticklabels=step_ticks,
-                            yticklabels=action_ticks,
-                        )
-                    ),
-                    "Q-value params SSD": qvalue_params_ssd,
-                    "Policy params SSD": policy_params_ssd,
+                    # "replay buffer size": len(meta_agent.replay_buffer),
+                    # "policy loc": wandb.Image(
+                    #     plot_vector_to_pil(
+                    #         policy_td["loc"].detach().cpu().numpy(),
+                    #         "Policy Loc",
+                    #         "Step",
+                    #         ticklabels=step_ticks,
+                    #     )
+                    # ),
+                    # "policy scale": wandb.Image(
+                    #     plot_vector_to_pil(
+                    #         policy_td["scale"].detach().cpu().numpy(),
+                    #         "Policy Scale",
+                    #         "Step",
+                    #         ticklabels=step_ticks,
+                    #     )
+                    # ),
+                    # "Q-values": wandb.Image(
+                    #     plot_to_pil(
+                    #         qvalue_td["state_action_value"].detach().cpu().numpy(),
+                    #         "Q-values",
+                    #         "Step",
+                    #         "Action",
+                    #         xticklabels=step_ticks,
+                    #         yticklabels=action_ticks,
+                    #     )
+                    # ),
+                    # "Q-value params SSD": qvalue_params_ssd,
+                    # "Policy params SSD": policy_params_ssd,
                     # "replay buffer priorities": wandb.Histogram(
                     #     meta_agent.replay_buffer.sampler.get_priorities()
                     # ),
