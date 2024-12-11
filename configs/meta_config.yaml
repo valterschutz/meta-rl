@@ -14,17 +14,10 @@ expensive_log_interval: 100
 hidden_units: 32
 
 # Target network hyperparameters
-target_eps: 0.99
 gamma: 1
 
 # Sampling/buffer hyperparameters
-# TODO: buffer sizes in terms of episodes
-# buffer_size: 1_000 # Will be equal to ten episodes of base agent training
-# min_buffer_size: # Will be equal to two episodes of base agent training
 sub_batch_size: 10
-# replay_alpha: 1.0
-replay_alpha: 0.7
-replay_beta: 0.5
 
 # Optimization hyperparameters
 # policy_lr: !!float 1e-6

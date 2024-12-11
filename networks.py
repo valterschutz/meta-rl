@@ -12,7 +12,6 @@ class MetaPolicyNet(nn.Module):
             nn.Tanh(),
             nn.Linear(hidden_units, hidden_units),
             nn.Tanh(),
-            # nn.Linear(hidden_units, 2),
             nn.Linear(hidden_units, 2),
         ).to(device)
         self.normal_params = (
@@ -27,15 +26,14 @@ class MetaPolicyNet(nn.Module):
         return loc, scale
 
 
-class MetaQValueNet(nn.Module):
+class MetaValueNet(nn.Module):
     def __init__(self, n_states, hidden_units, device):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(n_states + 1, hidden_units),
+            nn.Linear(n_states, hidden_units),
             nn.Tanh(),
             nn.Linear(hidden_units, hidden_units),
             nn.Tanh(),
-            # nn.Linear(hidden_units, 1),
             nn.Linear(hidden_units, 1),
         ).to(device)
 
