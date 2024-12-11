@@ -199,6 +199,7 @@ class MetaAgent:
         losses_alpha = []
         losses_actor = []
         losses_qvalue = []
+        losses_value = []
         self.replay_buffer.extend(td.clone().detach())  # Detach before extending
         for i in range(self.num_optim_epochs):
             # self.value_estimator(td)
@@ -207,11 +208,15 @@ class MetaAgent:
             self.optim.zero_grad()
             loss_td = self.loss_module(sub_base_td)
             loss = (
-                loss_td["loss_alpha"] + loss_td["loss_actor"] + loss_td["loss_qvalue"]
+                loss_td["loss_alpha"]
+                + loss_td["loss_actor"]
+                + loss_td["loss_qvalue"]
+                + loss_td["loss_value"]
             )
             losses_alpha.append(loss_td["loss_alpha"].mean().item())
             losses_actor.append(loss_td["loss_actor"].mean().item())
             losses_qvalue.append(loss_td["loss_qvalue"].mean().item())
+            losses_value.append(loss_td["loss_value"].mean().item())
             loss.backward()
             grad_norm = nn.utils.clip_grad_norm_(
                 self.loss_module.parameters(), self.max_grad_norm
@@ -235,6 +240,11 @@ class MetaAgent:
                 ),
                 "loss_qvalue": torch.tensor(
                     sum(losses_qvalue) / len(losses_qvalue),
+                    device=self.device,
+                    dtype=torch.float32,
+                ),
+                "loss_value": torch.tensor(
+                    sum(losses_value) / len(losses_value),
                     device=self.device,
                     dtype=torch.float32,
                 ),
