@@ -10,9 +10,9 @@ from tensordict.nn import InteractionType
 
 
 from torchrl.modules.tensordict_module import (
+    Actor,
     ProbabilisticActor,
     ValueOperator,
-    ActorCriticOperator,
     SafeModule,
 )
 from torchrl.data.replay_buffers import (
@@ -49,7 +49,7 @@ from torchrl.modules import TruncatedNormal, OneHotCategorical
 
 import wandb
 
-from networks import MetaPolicyNet, MetaQValueNet, MetaValueNet
+from networks import MetaPolicyNet, MetaQValueNet
 
 
 class MetaAgent:
@@ -59,6 +59,7 @@ class MetaAgent:
         action_spec,
         num_optim_epochs,
         buffer_size,
+        min_buffer_size,
         sub_batch_size,
         device,
         max_policy_grad_norm,
@@ -66,6 +67,7 @@ class MetaAgent:
         policy_lr,
         qvalue_lr,
         gamma,
+        lmbda,
         hidden_units,
         target_eps,
         replay_alpha,
@@ -80,6 +82,7 @@ class MetaAgent:
         self.action_spec = action_spec
 
         self.buffer_size = buffer_size
+        self.min_buffer_size = min_buffer_size
         self.num_optim_epochs = num_optim_epochs
         self.sub_batch_size = sub_batch_size
         self.device = device
@@ -88,6 +91,7 @@ class MetaAgent:
         self.policy_lr = policy_lr
         self.qvalue_lr = qvalue_lr
         self.gamma = gamma
+        self.lmbda = lmbda
         self.hidden_units = hidden_units
         self.target_eps = target_eps
         self.replay_alpha = replay_alpha
@@ -102,6 +106,9 @@ class MetaAgent:
             ),
             priority_key="td_error",
             batch_size=self.sub_batch_size,
+        )
+        self.replay_ready = (
+            False  # Set this to true once replay buffer has min_buffer_size elements
         )
         self.reset(
             mode=mode,
@@ -120,18 +127,19 @@ class MetaAgent:
         state_keys = ["step"]
 
         # Policy
-        actor_net = MetaPolicyNet(n_states, self.hidden_units, self.device)
-        policy_module = TensorDictModule(
-            actor_net, in_keys=state_keys, out_keys=["loc", "scale"]
-        )
-        self.policy_module = ProbabilisticActor(
-            module=policy_module,
+        policy_net = MetaPolicyNet(n_states, self.hidden_units, self.device)
+        # policy_module = TensorDictModule(
+        #     actor_net, in_keys=state_keys, out_keys=["loc", "scale"]
+        # )
+        self.policy_module = Actor(
+            module=policy_net,
             spec=self.action_spec,
-            in_keys=["loc", "scale"],
-            distribution_class=TruncatedNormal,
-            distribution_kwargs={"low": 0.0, "high": 1.0},
-            default_interaction_type=InteractionType.RANDOM,
-            return_log_prob=True,
+            in_keys=state_keys,
+            out_keys=["action"],
+            # distribution_class=TruncatedNormal,
+            # distribution_kwargs={"low": 0.0, "high": 1.0},
+            # default_interaction_type=InteractionType.RANDOM,
+            # return_log_prob=True,
         )
         if policy_module_state_dict is not None:
             self.policy_module.load_state_dict(policy_module_state_dict)
@@ -160,7 +168,7 @@ class MetaAgent:
             value_network=self.qvalue_module,
         )
         self.loss_module.make_value_estimator(
-            ValueEstimators.TD0, gamma=self.gamma
+            ValueEstimators.TDLambda, gamma=self.gamma, lmbda=self.lmbda
         )  # Que?
         self.policy_optim = torch.optim.Adam(
             self.policy_module.parameters(), lr=self.policy_lr
@@ -170,6 +178,7 @@ class MetaAgent:
         )
         self.target_updater = SoftUpdate(self.loss_module, eps=self.target_eps)
         self.replay_buffer.empty()
+        self.replay_ready = False
 
     def policy(self, td):
         return self.policy_module(td)
@@ -182,6 +191,11 @@ class MetaAgent:
         losses_policy = []
         losses_qvalue = []
         self.replay_buffer.extend(td.clone().detach())  # Detach before extending
+        if not self.replay_ready:
+            if len(self.replay_buffer) >= self.min_buffer_size:
+                self.replay_ready = True
+            else:
+                return None, None, None
         for _ in range(self.num_optim_epochs):
             sub_base_td = self.replay_buffer.sample()
             loss_td = self.loss_module(sub_base_td)
@@ -244,8 +258,6 @@ class BaseAgent:
         lmbda,
         clip_epsilon,
         use_entropy,
-        policy_module_state_dict=None,
-        value_module_state_dict=None,
         mode="train",
     ):
         super().__init__()
@@ -272,8 +284,6 @@ class BaseAgent:
 
         self.reset(
             mode=mode,
-            policy_module_state_dict=policy_module_state_dict,
-            value_module_state_dict=value_module_state_dict,
         )
 
     def policy(self, td):
@@ -282,8 +292,6 @@ class BaseAgent:
     def reset(
         self,
         mode: str,
-        policy_module_state_dict=None,
-        value_module_state_dict=None,
     ):
         n_states = self.state_spec["state"].n
         n_actions = self.action_spec.n
