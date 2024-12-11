@@ -59,18 +59,16 @@ class MetaAgent:
         action_spec,
         num_optim_epochs,
         buffer_size,
-        sub_batch_size,
         device,
         max_policy_grad_norm,
-        max_qvalue_grad_norm,
-        policy_lr,
-        qvalue_lr,
+        max_value_grad_norm,
+        lr,
         gamma,
         hidden_units,
         clip_epsilon,
         entropy_eps,
         policy_module_state_dict=None,
-        qvalue_module_state_dict=None,
+        value_module_state_dict=None,
         mode="train",
     ):
         super().__init__()
@@ -80,12 +78,10 @@ class MetaAgent:
 
         self.num_optim_epochs = num_optim_epochs
         self.buffer_size = buffer_size
-        self.sub_batch_size = sub_batch_size
         self.device = device
         self.max_policy_grad_norm = max_policy_grad_norm
-        self.max_qvalue_grad_norm = max_qvalue_grad_norm
-        self.policy_lr = policy_lr
-        self.qvalue_lr = qvalue_lr
+        self.max_value_grad_norm = max_value_grad_norm
+        self.lr = lr
         self.gamma = gamma
         self.hidden_units = hidden_units
         self.clip_epsilon = clip_epsilon
@@ -99,14 +95,14 @@ class MetaAgent:
         self.reset(
             mode=mode,
             policy_module_state_dict=policy_module_state_dict,
-            qvalue_module_state_dict=qvalue_module_state_dict,
+            value_module_state_dict=value_module_state_dict,
         )
 
     def reset(
         self,
         mode: str,
         policy_module_state_dict=None,
-        qvalue_module_state_dict=None,
+        value_module_state_dict=None,
     ):
         # state_keys = ["base_mean_reward", "last_action", "step"]
         state_keys = ["step"]
@@ -115,11 +111,18 @@ class MetaAgent:
 
         # Policy
         policy_net = MetaPolicyNet(n_states, self.hidden_units, self.device)
-        self.policy_module = Actor(
-            module=policy_net,
+        policy_module = TensorDictModule(
+            policy_net, in_keys=state_keys, out_keys=["loc", "scale"]
+        )
+        self.policy_module = ProbabilisticActor(
+            module=policy_module,
             spec=self.action_spec,
-            in_keys=state_keys,
+            in_keys=["loc", "scale"],
             out_keys=["action"],
+            distribution_class=TruncatedNormal,
+            distribution_kwargs={"low": 0.0, "high": 1.0},
+            default_interaction_type=InteractionType.RANDOM,
+            return_log_prob=True,
         )
         if policy_module_state_dict is not None:
             self.policy_module.load_state_dict(policy_module_state_dict)
@@ -153,14 +156,9 @@ class MetaAgent:
             loss_critic_type="smooth_l1",
         )
         self.advantage_module = TD0Estimator(
-            gamma=self.gamma, value_network=self.qvalue_module
+            gamma=self.gamma, value_network=self.value_module
         )
-        self.policy_optim = torch.optim.Adam(
-            self.policy_module.parameters(), lr=self.policy_lr
-        )
-        self.qvalue_optim = torch.optim.Adam(
-            self.qvalue_module.parameters(), lr=self.qvalue_lr
-        )
+        self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
 
         self.replay_buffer.empty()
 
@@ -169,52 +167,64 @@ class MetaAgent:
 
     def process_batch(self, td, verbose=False):
         # Process a single batch of data and return losses and maximum grad norm
-        # times_to_sample = len(td) // self.sub_batch_size
+        td["sample_log_prob"] = td["sample_log_prob"].detach()
+        td["action"] = td["action"].detach()
         avg_policy_grad_norm = 0
-        avg_qvalue_grad_norm = 0
-        losses_policy = []
-        losses_qvalue = []
-        times_to_sample = len(td) // self.sub_batch_size
+        avg_value_grad_norm = 0
+        losses_objective = []
+        losses_critic = []
+        losses_entropy = []
         for i in range(self.num_optim_epochs):
             self.advantage_module(td)
-            self.replay_buffer.extend(td.clone().detach())  # Detach before extending
-            for j in range(times_to_sample):
-                sub_base_td = self.replay_buffer.sample()
-                loss_td = self.loss_module(sub_base_td)
 
-                # Actor loss
-                losses_policy.append(loss_td["loss_actor"].mean().item())
-                loss_td["loss_actor"].backward()
-                policy_grad_norm = nn.utils.clip_grad_norm_(
-                    self.policy_module.parameters(), self.max_policy_grad_norm
-                )
-                avg_policy_grad_norm += (1 / (i + 1)) * (
-                    policy_grad_norm.item() - avg_policy_grad_norm
-                )
-                self.policy_optim.step()
-                self.policy_optim.zero_grad()
+            sub_base_td = td.clone()
 
-                # Q-value loss
-                losses_qvalue.append(loss_td["loss_value"].mean().item())
-                loss_td["loss_value"].backward()
-                qvalue_grad_norm = nn.utils.clip_grad_norm_(
-                    self.qvalue_module.parameters(), self.max_qvalue_grad_norm
-                )
-                avg_qvalue_grad_norm += (1 / (i + 1)) * (
-                    qvalue_grad_norm.item() - avg_qvalue_grad_norm
-                )
-                self.qvalue_optim.step()
-                self.qvalue_optim.zero_grad()
+            loss_td = self.loss_module(sub_base_td)
+
+            # Loss propagation
+            loss = (
+                loss_td["loss_objective"] + loss_td["loss_critic"] + loss_td["entropy"]
+            )
+            loss.backward()
+
+            # Log losses
+            losses_objective.append(loss_td["loss_objective"].mean().item())
+            losses_critic.append(loss_td["loss_critic"].mean().item())
+            losses_entropy.append(loss_td["loss_entropy"].mean().item())
+
+            # Policy gradient norm
+            policy_grad_norm = nn.utils.clip_grad_norm_(
+                self.policy_module.parameters(), self.max_policy_grad_norm
+            )
+            avg_policy_grad_norm += (1 / (i + 1)) * (
+                policy_grad_norm.item() - avg_policy_grad_norm
+            )
+
+            # Value gradient norm
+            value_grad_norm = nn.utils.clip_grad_norm_(
+                self.value_module.parameters(), self.max_value_grad_norm
+            )
+            avg_value_grad_norm += (1 / (i + 1)) * (
+                value_grad_norm.item() - avg_value_grad_norm
+            )
+
+            self.optim.step()
+            self.optim.zero_grad()
 
         losses = TensorDict(
             {
-                "loss_actor": torch.tensor(
-                    sum(losses_policy) / len(losses_policy),
+                "loss_objective": torch.tensor(
+                    sum(losses_objective) / len(losses_objective),
                     device=self.device,
                     dtype=torch.float32,
                 ),
-                "loss_qvalue": torch.tensor(
-                    sum(losses_qvalue) / len(losses_qvalue),
+                "loss_critic": torch.tensor(
+                    sum(losses_critic) / len(losses_critic),
+                    device=self.device,
+                    dtype=torch.float32,
+                ),
+                "loss_entropy": torch.tensor(
+                    sum(losses_entropy) / len(losses_entropy),
                     device=self.device,
                     dtype=torch.float32,
                 ),
@@ -222,7 +232,7 @@ class MetaAgent:
             batch_size=(),
         )
 
-        return losses, avg_policy_grad_norm, avg_qvalue_grad_norm
+        return losses, avg_policy_grad_norm, avg_value_grad_norm
 
 
 class BaseAgent:

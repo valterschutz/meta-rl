@@ -1,6 +1,6 @@
 device: "cpu"
 policy_module_name: "policy_module"
-qvalue_module_name: "qvalue_module"
+value_module_name: "value_module"
 rollout_timeout: 999999
 
 # How long to train
@@ -17,13 +17,12 @@ hidden_units: 32
 gamma: 1
 
 # Sampling/buffer hyperparameters
-sub_batch_size: 10
+# sub_batch_size: 1
 
 # Optimization hyperparameters
-# policy_lr: !!float 1e-6
-policy_lr: !!float 1e-4
-# qvalue_lr: !!float 1e-8
-qvalue_lr: !!float 1e-4
+lr: !!float 1e-4
 num_optim_epochs: 20
 max_policy_grad_norm: 1
-max_qvalue_grad_norm: 100
+max_value_grad_norm: 100
+clip_epsilon: 0.2
+entropy_eps: !!float 1e-4 # TODO: check what this is
