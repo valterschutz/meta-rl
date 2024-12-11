@@ -67,7 +67,6 @@ class MetaAgent:
         policy_lr,
         qvalue_lr,
         gamma,
-        lmbda,
         hidden_units,
         target_eps,
         replay_alpha,
@@ -91,7 +90,6 @@ class MetaAgent:
         self.policy_lr = policy_lr
         self.qvalue_lr = qvalue_lr
         self.gamma = gamma
-        self.lmbda = lmbda
         self.hidden_units = hidden_units
         self.target_eps = target_eps
         self.replay_alpha = replay_alpha

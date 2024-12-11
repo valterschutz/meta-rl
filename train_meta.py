@@ -165,7 +165,6 @@ meta_agent = MetaAgent(
     policy_lr=meta_config["policy_lr"],
     qvalue_lr=meta_config["qvalue_lr"],
     gamma=meta_config["gamma"],
-    lmbda=meta_config["lmbda"],
     hidden_units=meta_config["hidden_units"],
     target_eps=meta_config["target_eps"],
     replay_alpha=meta_config["replay_alpha"],

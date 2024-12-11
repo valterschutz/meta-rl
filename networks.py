@@ -12,19 +12,14 @@ class MetaPolicyNet(nn.Module):
             nn.Tanh(),
             nn.Linear(hidden_units, hidden_units),
             nn.Tanh(),
-            # nn.Linear(hidden_units, 2),
-            nn.Linear(hidden_units, 2),
+            nn.Linear(hidden_units, 1),
         ).to(device)
-        self.normal_params = (
-            NormalParamExtractor()
-        )  # TODO: This seems to add constants to the variance...
 
     def forward(self, *args):
         x = torch.cat(args, dim=-1)
-        x = self.net(x)  # (batch, 2 * n_actions)
-        loc, scale = self.normal_params(x)
-        loc = F.sigmoid(loc)
-        return loc, scale
+        x = self.net(x)
+        loc = F.sigmoid(x)
+        return loc
 
 
 class MetaQValueNet(nn.Module):
