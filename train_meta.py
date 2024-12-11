@@ -183,7 +183,6 @@ try:
     )
     # For logging SSD of params during training
     old_qvalue_params = get_params(meta_agent.qvalue_module)
-    old_value_params = get_params(meta_agent.value_module)
     old_policy_params = get_params(meta_agent.policy_module)
 
     for i in range(meta_config["train_episodes"]):
@@ -195,13 +194,10 @@ try:
 
             # TODO: remove after debugging
             qvalue_params = get_params(meta_agent.qvalue_module)
-            value_params = get_params(meta_agent.value_module)
             policy_params = get_params(meta_agent.policy_module)
             qvalue_params_ssd = calc_ssd(old_qvalue_params, qvalue_params)
-            value_params_ssd = calc_ssd(old_value_params, value_params)
             policy_params_ssd = calc_ssd(old_policy_params, policy_params)
             old_qvalue_params = get_params(meta_agent.qvalue_module)
-            old_value_params = get_params(meta_agent.value_module)
             old_policy_params = get_params(meta_agent.policy_module)
             pbar.update(meta_td.numel())
 
@@ -214,7 +210,6 @@ try:
             # Visualize policy probabilities and Q-values
             policy_td = meta_agent.policy_module(step_td)
             qvalue_td = meta_agent.qvalue_module(step_action_td)
-            value_td = meta_agent.value_module(step_td)
             wandb.log(
                 {
                     "step": j,
@@ -224,9 +219,7 @@ try:
                     "action": meta_td["action"].item(),
                     "meta reward": meta_td["next", "reward"].item(),
                     "meta loss_actor": meta_losses["loss_actor"].item(),
-                    "meta loss_alpha": meta_losses["loss_alpha"].item(),
                     "meta loss_qvalue": meta_losses["loss_qvalue"].item(),
-                    "meta loss_value": meta_losses["loss_value"].item(),
                     "meta max_grad_norm": meta_max_grad,
                     "base loss_objective": meta_td[
                         "base", "losses", "loss_objective"
@@ -272,16 +265,7 @@ try:
                             yticklabels=action_ticks,
                         )
                     ),
-                    "Values": wandb.Image(
-                        plot_vector_to_pil(
-                            value_td["state_value"].detach().cpu().numpy(),
-                            "Values",
-                            "Step",
-                            ticklabels=step_ticks,
-                        )
-                    ),
                     "Q-value params SSD": qvalue_params_ssd,
-                    "Value params SSD": value_params_ssd,
                     "Policy params SSD": policy_params_ssd,
                     # "replay buffer priorities": wandb.Histogram(
                     #     meta_agent.replay_buffer.sampler.get_priorities()
