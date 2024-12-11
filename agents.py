@@ -175,13 +175,18 @@ class MetaAgent:
             target_entropy=self.target_entropy,
             # delay_qvalue=False,  # TODO: turn this on again
         )
-        # self.loss_module.make_value_estimator(
-        #     ValueEstimators.TD0, gamma=self.gamma
-        # )  # Que?
-        self.advantage_module = GAE(
-            gamma=self.gamma, lmbda=0.95, value_network=self.value_module
+        self.loss_module.make_value_estimator(
+            ValueEstimators.TD0, gamma=self.gamma
+        )  # Que?
+        # self.advantage_module = GAE(
+        #     gamma=self.gamma, lmbda=0.95, value_network=self.value_module
+        # )
+        # self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
+        self.actor_optim = torch.optim.Adam(self.policy_module.parameters(), lr=self.lr)
+        self.value_optim = torch.optim.Adam(self.value_module.parameters(), lr=self.lr)
+        self.qvalue_optim = torch.optim.Adam(
+            self.qvalue_module.parameters(), lr=self.lr
         )
-        self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
         self.target_updater = SoftUpdate(self.loss_module, eps=self.target_eps)
         self.replay_buffer.empty()
 
@@ -204,28 +209,40 @@ class MetaAgent:
         for i in range(self.num_optim_epochs):
             # self.value_estimator(td)
             sub_base_td = self.replay_buffer.sample()
-            self.advantage_module(sub_base_td)
-            self.optim.zero_grad()
+            # self.advantage_module(sub_base_td)
+            # self.optim.zero_grad()
             loss_td = self.loss_module(sub_base_td)
-            loss = (
-                loss_td["loss_alpha"]
-                + loss_td["loss_actor"]
-                + loss_td["loss_qvalue"]
-                + loss_td["loss_value"]
-            )
+            loss_td["loss_alpha"].backward()
+            loss_td["loss_actor"].backward()
+            loss_td["loss_qvalue"].backward()
+            loss_td["loss_value"].backward()
+            # loss = (
+            #     loss_td["loss_alpha"]
+            #     + loss_td["loss_actor"]
+            #     + loss_td["loss_qvalue"]
+            #     + loss_td["loss_value"]
+            # )
             losses_alpha.append(loss_td["loss_alpha"].mean().item())
             losses_actor.append(loss_td["loss_actor"].mean().item())
             losses_qvalue.append(loss_td["loss_qvalue"].mean().item())
             losses_value.append(loss_td["loss_value"].mean().item())
-            loss.backward()
+            # loss.backward()
             grad_norm = nn.utils.clip_grad_norm_(
                 self.loss_module.parameters(), self.max_grad_norm
             )
             max_grad_norm = max(grad_norm.item(), max_grad_norm)
-            self.optim.step()
+            # self.optim.step()
+            self.actor_optim.step()
+            self.value_optim.step()
+            self.qvalue_optim.step()
+            self.actor_optim.zero_grad()
+            self.value_optim.zero_grad()
+            self.qvalue_optim.zero_grad()
+
+            self.replay_buffer.update_tensordict_priority(sub_base_td)
+
             self.target_updater.step()
             # Update replay buffer with new priorities
-            self.replay_buffer.update_tensordict_priority(sub_base_td)
         losses = TensorDict(
             {
                 "loss_alpha": torch.tensor(

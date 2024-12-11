@@ -226,6 +226,7 @@ try:
                     "meta loss_actor": meta_losses["loss_actor"].item(),
                     "meta loss_alpha": meta_losses["loss_alpha"].item(),
                     "meta loss_qvalue": meta_losses["loss_qvalue"].item(),
+                    "meta loss_value": meta_losses["loss_value"].item(),
                     "meta max_grad_norm": meta_max_grad,
                     "base loss_objective": meta_td[
                         "base", "losses", "loss_objective"
