@@ -36,7 +36,7 @@ from torchrl.objectives import (
     ValueEstimators,
     SoftUpdate,
 )
-from torchrl.objectives.value import GAE
+from torchrl.objectives.value import GAE, TD0Estimator
 
 # from torchrl.modules import IndependentNormal
 
@@ -49,7 +49,7 @@ from torchrl.modules import TruncatedNormal, OneHotCategorical
 
 import wandb
 
-from networks import MetaPolicyNet, MetaQValueNet
+from networks import MetaPolicyNet, MetaQValueNet, MetaValueNet
 
 
 class MetaAgent:
@@ -71,6 +71,7 @@ class MetaAgent:
         replay_beta,
         policy_module_state_dict=None,
         qvalue_module_state_dict=None,
+        value_module_state_dict=None,
         mode="train",
     ):
         super().__init__()
@@ -105,6 +106,7 @@ class MetaAgent:
             mode=mode,
             policy_module_state_dict=policy_module_state_dict,
             qvalue_module_state_dict=qvalue_module_state_dict,
+            value_module_state_dict=value_module_state_dict,
         )
 
     def reset(
@@ -112,12 +114,13 @@ class MetaAgent:
         mode: str,
         policy_module_state_dict=None,
         qvalue_module_state_dict=None,
+        value_module_state_dict=None,
     ):
         n_states = 1
         # state_keys = ["base_mean_reward", "base_std_reward", "last_action", "step"]
         state_keys = ["step"]
 
-        # Policy head
+        # Policy
         actor_net = MetaPolicyNet(n_states, self.hidden_units, self.device)
         policy_module = TensorDictModule(
             actor_net, in_keys=state_keys, out_keys=["loc", "scale"]
@@ -134,7 +137,7 @@ class MetaAgent:
         if policy_module_state_dict is not None:
             self.policy_module.load_state_dict(policy_module_state_dict)
 
-        # Action value head
+        # Action value
         qvalue_net = MetaQValueNet(n_states, self.hidden_units, self.device)
         self.qvalue_module = ValueOperator(
             qvalue_net,
@@ -144,31 +147,42 @@ class MetaAgent:
         if qvalue_module_state_dict is not None:
             self.qvalue_module.load_state_dict(qvalue_module_state_dict)
 
+        # State value
+        value_net = MetaValueNet(n_states, self.hidden_units, self.device)
+        self.value_module = ValueOperator(
+            value_net,
+            in_keys=state_keys,
+            out_keys=["state_value"],
+        )
+        if value_module_state_dict is not None:
+            self.value_module.load_state_dict(value_module_state_dict)
+
         if mode == "train":
             self.policy_module.train()
             self.qvalue_module.train()
+            self.value_module.train()
         elif mode == "eval":
             self.policy_module.eval()
             self.qvalue_module.eval()
+            self.value_module.eval()
         else:
             raise ValueError(f"Unknown mode: {mode}")
 
         self.loss_module = SACLoss(
             actor_network=self.policy_module,
             qvalue_network=self.qvalue_module,
+            value_network=self.value_module,
             target_entropy=self.target_entropy,
-            delay_qvalue=False,  # TODO: turn this on again
+            # delay_qvalue=False,  # TODO: turn this on again
         )
-        self.loss_module.make_value_estimator(
-            ValueEstimators.TD0, gamma=self.gamma
-        )  # Que?
+        # self.loss_module.make_value_estimator(
+        #     ValueEstimators.TD0, gamma=self.gamma
+        # )  # Que?
+        self.advantage_module = GAE(
+            gamma=self.gamma, lmbda=0.95, value_network=self.value_module
+        )
         self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
-        # self.optim = torch.optim.Adam(
-        #     list(self.policy_module.parameters())
-        #     + list(self.qvalue_module.parameters()),
-        #     lr=self.lr,
-        # )
-        # self.target_updater = SoftUpdate(self.loss_module, eps=self.target_eps)
+        self.target_updater = SoftUpdate(self.loss_module, eps=self.target_eps)
         self.replay_buffer.empty()
 
     def policy(self, td):
@@ -189,8 +203,7 @@ class MetaAgent:
         for i in range(self.num_optim_epochs):
             # self.value_estimator(td)
             sub_base_td = self.replay_buffer.sample()
-            # self.advantage_module(sub_base_td)
-
+            self.advantage_module(sub_base_td)
             self.optim.zero_grad()
             loss_td = self.loss_module(sub_base_td)
             loss = (
@@ -205,7 +218,7 @@ class MetaAgent:
             )
             max_grad_norm = max(grad_norm.item(), max_grad_norm)
             self.optim.step()
-            # self.target_updater.step()
+            self.target_updater.step()
             # Update replay buffer with new priorities
             self.replay_buffer.update_tensordict_priority(sub_base_td)
         losses = TensorDict(

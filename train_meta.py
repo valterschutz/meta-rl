@@ -178,9 +178,12 @@ wandb.init(
 
 try:
     # For visualizing policy and qvalues
-    policy_td, qvalue_td, action_ticks, step_ticks = prep_data(meta_steps_per_episode)
+    step_td, step_action_td, action_ticks, step_ticks = prep_data(
+        meta_steps_per_episode
+    )
     # For logging SSD of params during training
     old_qvalue_params = get_params(meta_agent.qvalue_module)
+    old_value_params = get_params(meta_agent.value_module)
     old_policy_params = get_params(meta_agent.policy_module)
 
     for i in range(meta_config["train_episodes"]):
@@ -189,11 +192,16 @@ try:
             meta_td = meta_agent.policy(meta_td)
             meta_td = meta_env.step(meta_td)
             meta_losses, meta_max_grad = meta_agent.process_batch(meta_td.unsqueeze(0))
+
+            # TODO: remove after debugging
             qvalue_params = get_params(meta_agent.qvalue_module)
+            value_params = get_params(meta_agent.value_module)
             policy_params = get_params(meta_agent.policy_module)
             qvalue_params_ssd = calc_ssd(old_qvalue_params, qvalue_params)
+            value_params_ssd = calc_ssd(old_value_params, value_params)
             policy_params_ssd = calc_ssd(old_policy_params, policy_params)
             old_qvalue_params = get_params(meta_agent.qvalue_module)
+            old_value_params = get_params(meta_agent.value_module)
             old_policy_params = get_params(meta_agent.policy_module)
             pbar.update(meta_td.numel())
 
@@ -204,8 +212,8 @@ try:
             #     len(meta_agent.replay_buffer)
             # )  # TODO: remove when not debugging
             # Visualize policy probabilities and Q-values
-            policy_td = meta_agent.policy_module(policy_td)
-            qvalue_td = meta_agent.qvalue_module(qvalue_td)
+            step_td = meta_agent.policy_module(step_td)
+            step_action_td = meta_agent.qvalue_module(step_action_td)
             wandb.log(
                 {
                     "step": j,
@@ -238,7 +246,7 @@ try:
                     "replay buffer size": len(meta_agent.replay_buffer),
                     "policy loc": wandb.Image(
                         plot_vector_to_pil(
-                            policy_td["loc"].detach().cpu().numpy(),
+                            step_td["loc"].detach().cpu().numpy(),
                             "Policy Loc",
                             "Step",
                             ticklabels=step_ticks,
@@ -246,7 +254,7 @@ try:
                     ),
                     "policy scale": wandb.Image(
                         plot_vector_to_pil(
-                            policy_td["scale"].detach().cpu().numpy(),
+                            step_td["scale"].detach().cpu().numpy(),
                             "Policy Scale",
                             "Step",
                             ticklabels=step_ticks,
@@ -254,7 +262,7 @@ try:
                     ),
                     "Q-values": wandb.Image(
                         plot_to_pil(
-                            qvalue_td["state_action_value"].detach().cpu().numpy(),
+                            step_action_td["state_action_value"].detach().cpu().numpy(),
                             "Q-values",
                             "Step",
                             "Action",
@@ -263,6 +271,7 @@ try:
                         )
                     ),
                     "Q-value params SSD": qvalue_params_ssd,
+                    "Value params SSD": value_params_ssd,
                     "Policy params SSD": policy_params_ssd,
                     # "replay buffer priorities": wandb.Histogram(
                     #     meta_agent.replay_buffer.sampler.get_priorities()
