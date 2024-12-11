@@ -181,9 +181,9 @@ wandb.init(
 
 try:
     # For visualizing policy and qvalues
-    step_td, step_action_td, action_ticks, step_ticks = prep_data(
-        meta_steps_per_episode
-    )
+    # step_td, step_action_td, action_ticks, step_ticks = prep_data(
+    #     meta_steps_per_episode
+    # )
     # For logging SSD of params during training
     old_qvalue_params = get_params(meta_agent.qvalue_module)
     old_policy_params = get_params(meta_agent.policy_module)
@@ -208,27 +208,27 @@ try:
                 old_qvalue_params = get_params(meta_agent.qvalue_module)
                 old_policy_params = get_params(meta_agent.policy_module)
                 # Visualize policy probabilities and Q-values
-                policy_td = meta_agent.policy_module(step_td)
-                qvalue_td = meta_agent.qvalue_module(step_action_td)
+                # policy_td = meta_agent.policy_module(step_td)
+                # qvalue_td = meta_agent.qvalue_module(step_action_td)
                 log_dict0 = {
-                    "policy": wandb.Image(
-                        plot_vector_to_pil(
-                            policy_td["action"].detach().cpu().numpy(),
-                            "Policy",
-                            "Step",
-                            ticklabels=step_ticks,
-                        )
-                    ),
-                    "Q-values": wandb.Image(
-                        plot_to_pil(
-                            qvalue_td["state_action_value"].detach().cpu().numpy(),
-                            "Q-values",
-                            "Step",
-                            "Action",
-                            xticklabels=step_ticks,
-                            yticklabels=action_ticks,
-                        )
-                    ),
+                    # "policy": wandb.Image(
+                    #     plot_vector_to_pil(
+                    #         policy_td["action"].detach().cpu().numpy(),
+                    #         "Policy",
+                    #         "Step",
+                    #         ticklabels=step_ticks,
+                    #     )
+                    # ),
+                    # "Q-values": wandb.Image(
+                    #     plot_to_pil(
+                    #         qvalue_td["state_action_value"].detach().cpu().numpy(),
+                    #         "Q-values",
+                    #         "Step",
+                    #         "Action",
+                    #         xticklabels=step_ticks,
+                    #         yticklabels=action_ticks,
+                    #     )
+                    # ),
                     "Q-value params SSD": qvalue_params_ssd,
                     "Policy params SSD": policy_params_ssd,
                 }

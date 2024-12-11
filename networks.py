@@ -9,9 +9,9 @@ class MetaPolicyNet(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(n_states, hidden_units),
-            # nn.Tanh(),
-            # nn.Linear(hidden_units, hidden_units),
-            # nn.Tanh(),
+            nn.Tanh(),
+            nn.Linear(hidden_units, hidden_units),
+            nn.Tanh(),
             # nn.Linear(hidden_units, 2),
             nn.Linear(hidden_units, 2),
         ).to(device)
@@ -33,8 +33,8 @@ class MetaQValueNet(nn.Module):
         self.net = nn.Sequential(
             nn.Linear(n_states + 1, hidden_units),
             nn.Tanh(),
-            # nn.Linear(hidden_units, hidden_units),
-            # nn.Tanh(),
+            nn.Linear(hidden_units, hidden_units),
+            nn.Tanh(),
             # nn.Linear(hidden_units, 1),
             nn.Linear(hidden_units, 1),
         ).to(device)

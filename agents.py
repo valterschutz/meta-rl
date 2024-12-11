@@ -122,24 +122,17 @@ class MetaAgent:
         policy_module_state_dict=None,
         qvalue_module_state_dict=None,
     ):
-        n_states = 1
-        # state_keys = ["base_mean_reward", "base_std_reward", "last_action", "step"]
-        state_keys = ["step"]
+        state_keys = ["base_mean_reward", "base_std_reward", "last_action", "step"]
+        n_states = len(state_keys)
+        # state_keys = ["step"]
 
         # Policy
         policy_net = MetaPolicyNet(n_states, self.hidden_units, self.device)
-        # policy_module = TensorDictModule(
-        #     actor_net, in_keys=state_keys, out_keys=["loc", "scale"]
-        # )
         self.policy_module = Actor(
             module=policy_net,
             spec=self.action_spec,
             in_keys=state_keys,
             out_keys=["action"],
-            # distribution_class=TruncatedNormal,
-            # distribution_kwargs={"low": 0.0, "high": 1.0},
-            # default_interaction_type=InteractionType.RANDOM,
-            # return_log_prob=True,
         )
         if policy_module_state_dict is not None:
             self.policy_module.load_state_dict(policy_module_state_dict)

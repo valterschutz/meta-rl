@@ -11,7 +11,7 @@ eval_episodes: 10
 expensive_log_interval: 100
 
 # Model hyperparameters
-hidden_units: 8
+hidden_units: 256
 
 # Target network hyperparameters
 target_eps: 0.99
@@ -20,15 +20,15 @@ lmbda: 0.5
 
 # Sampling/buffer hyperparameters
 buffer_size: 1_000
-min_buffer_size: 500 # How many elements we want in the buffer before we start training
-sub_batch_size: 25
+min_buffer_size: 100 # How many elements we want in the buffer before we start training
+sub_batch_size: 10
 # replay_alpha: 1.0
 replay_alpha: 0.7
 replay_beta: 0.5
 
 # Optimization hyperparameters
-policy_lr: !!float 1e-4
-qvalue_lr: !!float 1e-3
+policy_lr: !!float 1e-5
+qvalue_lr: !!float 1e-5
 num_optim_epochs: 20
 max_policy_grad_norm: 1
 max_qvalue_grad_norm: 100
