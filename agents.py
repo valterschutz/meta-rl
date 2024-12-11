@@ -122,7 +122,7 @@ class MetaAgent:
         policy_module_state_dict=None,
         qvalue_module_state_dict=None,
     ):
-        state_keys = ["base_mean_reward", "base_std_reward", "last_action", "step"]
+        state_keys = ["base_mean_reward", "last_action", "step"]
         n_states = len(state_keys)
         # state_keys = ["step"]
 
@@ -160,9 +160,10 @@ class MetaAgent:
             actor_network=self.policy_module,
             value_network=self.qvalue_module,
         )
-        self.loss_module.make_value_estimator(
-            ValueEstimators.TDLambda, gamma=self.gamma, lmbda=self.lmbda
-        )  # Que?
+        # self.loss_module.make_value_estimator(
+        #     ValueEstimators.TDLambda, gamma=self.gamma, lmbda=self.lmbda
+        # )  # Que?
+        self.loss_module.make_value_estimator(ValueEstimators.TD0, gamma=self.gamma)
         self.policy_optim = torch.optim.Adam(
             self.policy_module.parameters(), lr=self.policy_lr
         )
@@ -189,7 +190,7 @@ class MetaAgent:
                 self.replay_ready = True
             else:
                 return None, None, None
-        for _ in range(self.num_optim_epochs):
+        for i in range(self.num_optim_epochs):
             sub_base_td = self.replay_buffer.sample()
             loss_td = self.loss_module(sub_base_td)
 
@@ -199,7 +200,9 @@ class MetaAgent:
             policy_grad_norm = nn.utils.clip_grad_norm_(
                 self.policy_module.parameters(), self.max_policy_grad_norm
             )
-            max_policy_grad_norm = max(policy_grad_norm.item(), max_policy_grad_norm)
+            max_policy_grad_norm += (1 / (i + 1)) * (
+                policy_grad_norm.item() - max_policy_grad_norm
+            )
             self.policy_optim.step()
             self.policy_optim.zero_grad()
 
@@ -209,7 +212,9 @@ class MetaAgent:
             qvalue_grad_norm = nn.utils.clip_grad_norm_(
                 self.qvalue_module.parameters(), self.max_qvalue_grad_norm
             )
-            max_qvalue_grad_norm = max(qvalue_grad_norm.item(), max_qvalue_grad_norm)
+            max_qvalue_grad_norm += (1 / (i + 1)) * (
+                qvalue_grad_norm.item() - max_qvalue_grad_norm
+            )
             self.qvalue_optim.step()
             self.qvalue_optim.zero_grad()
 

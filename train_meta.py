@@ -131,6 +131,13 @@ with open(args.base_config, "r", encoding="UTF-8") as f:
     base_config = yaml.safe_load(f)
 with open(args.meta_config, "r", encoding="UTF-8") as f:
     meta_config = yaml.safe_load(f)
+meta_steps_per_episode = base_config["total_frames"] // base_config["batch_size"]
+meta_total_steps = meta_steps_per_episode * meta_config["train_episodes"]
+meta_buffer_size = 10 * meta_steps_per_episode
+meta_min_buffer_size = 1 * meta_steps_per_episode
+print(f"Meta steps per episode: {meta_steps_per_episode}")
+print(f"Buffer size: {meta_buffer_size}")
+print(f"Min buffer size: {meta_min_buffer_size}")
 
 base_env, base_agent, base_collector_fn = get_base_from_config(DictWrapper(base_config))
 
@@ -149,8 +156,8 @@ meta_agent = MetaAgent(
     state_spec=meta_env.state_spec,
     action_spec=meta_env.action_spec,
     num_optim_epochs=meta_config["num_optim_epochs"],
-    buffer_size=meta_config["buffer_size"],
-    min_buffer_size=meta_config["min_buffer_size"],
+    buffer_size=10 * meta_steps_per_episode,
+    min_buffer_size=2 * meta_steps_per_episode,
     sub_batch_size=meta_config["sub_batch_size"],
     device=meta_config["device"],
     max_policy_grad_norm=meta_config["max_policy_grad_norm"],
@@ -165,8 +172,6 @@ meta_agent = MetaAgent(
     replay_beta=meta_config["replay_beta"],
 )
 
-meta_steps_per_episode = base_config["total_frames"] // base_config["batch_size"]
-meta_total_steps = meta_steps_per_episode * meta_config["train_episodes"]
 pbar = tqdm(total=meta_total_steps)
 
 wandb.login()
@@ -191,8 +196,11 @@ try:
     for i in range(meta_config["train_episodes"]):
         meta_td = meta_env.reset()  # Resets base agent in meta environment
         for j in range(meta_steps_per_episode):
-            meta_td = meta_agent.policy(meta_td)
-            meta_td = meta_env.step(meta_td)
+            if not meta_agent.replay_ready:
+                meta_td = meta_env.rand_step(meta_td)
+            else:
+                meta_td = meta_agent.policy(meta_td)
+                meta_td = meta_env.step(meta_td)
             meta_losses, meta_max_policy_grad_norm, meta_max_qvalue_grad_norm = (
                 meta_agent.process_batch(meta_td.unsqueeze(0))
             )
