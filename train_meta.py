@@ -148,7 +148,7 @@ meta_env = MetaEnv(
 check_env_specs(meta_env)
 
 # Meta agent
-meta_agent = MetaAgent(
+meta_agent = PPOMetaAgent(
     state_spec=meta_env.state_spec,
     action_spec=meta_env.action_spec,
     num_optim_epochs=meta_config["num_optim_epochs"],

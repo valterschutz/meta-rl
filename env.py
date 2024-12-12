@@ -382,7 +382,7 @@ class MetaEnv(EnvBase):
         next_meta_td["base_true_mean_reward"] = base_td["next", "true_reward"].mean(0)
         next_meta_td["base_mean_reward"] = base_td["next", "reward"].mean(0)
         next_meta_td["base_std_reward"] = base_td["next", "reward"].std(0)
-        next_meta_td["last_action"] = meta_td["action"]
+        next_meta_td["last_action"] = meta_td["action"].detach()  # Note detach
         next_meta_td["reward"] = base_td["next", "true_reward"].mean(0)
         base_losses, base_grad_norm = self.base_agent.process_batch(base_td)
         next_meta_td["done"] = not self.is_batches_remaining(self.base_iter)

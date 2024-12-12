@@ -4,7 +4,7 @@ value_module_name: "value_module"
 rollout_timeout: 999999
 
 # How long to train
-train_episodes: 1000
+train_episodes: 100
 eval_episodes: 10
 
 # How often to log expensive metrics

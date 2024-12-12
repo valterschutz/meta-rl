@@ -38,7 +38,7 @@ def get_base_from_config(config):
     ).to(config.device)
     check_env_specs(env)
 
-    agent = BaseAgent(
+    agent = PPOBaseAgent(
         state_spec=env.state_spec,
         action_spec=env.action_spec,
         num_optim_epochs=config.num_optim_epochs,

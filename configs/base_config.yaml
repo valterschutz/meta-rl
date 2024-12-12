@@ -15,8 +15,8 @@ punishment: 0.0
 rollout_timeout: 200
 
 # How to switch the constraint
-no_weight_fraction: 0.2
-full_weight_fraction: 0.8
+no_weight_fraction: 0.001
+full_weight_fraction: 0.01
 
 # Loss hyperparameters
 clip_epsilon: 0.2

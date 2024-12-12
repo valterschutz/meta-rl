@@ -52,7 +52,7 @@ import wandb
 from networks import MetaPolicyNet, MetaValueNet
 
 
-class MetaAgent:
+class PPOMetaAgent:
     def __init__(
         self,
         state_spec,
@@ -108,7 +108,8 @@ class MetaAgent:
         policy_module_state_dict=None,
         value_module_state_dict=None,
     ):
-        state_keys = ["base_true_mean_reward"]
+        # state_keys = ["base_true_mean_reward", "last_action"]  # Must haves
+        state_keys = ["last_action"]  # Sanity check?
         # state_keys = ["step"]
         n_states = len(state_keys)
         # state_keys = ["step"]
@@ -239,7 +240,7 @@ class MetaAgent:
         return losses, avg_policy_grad_norm, avg_value_grad_norm
 
 
-class BaseAgent:
+class PPOBaseAgent:
     def __init__(
         self,
         state_spec,
