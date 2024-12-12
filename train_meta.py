@@ -135,7 +135,10 @@ meta_steps_per_episode = base_config["total_frames"] // base_config["batch_size"
 meta_total_steps = meta_steps_per_episode * meta_config["train_episodes"]
 print(f"Meta steps per episode: {meta_steps_per_episode}")
 
-base_env, base_agent, base_collector_fn = get_base_from_config(DictWrapper(base_config))
+base_env, base_agent, base_collector_fn = get_cartpole_base_from_config(
+    DictWrapper(cartpole_config)
+)
+
 
 # Meta env
 meta_env = MetaEnv(

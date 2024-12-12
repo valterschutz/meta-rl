@@ -1,0 +1,25 @@
+
+device: "cpu"
+
+# How many frames per batch
+batch_size: 1024
+# How long to train
+total_frames: 102400
+
+# When to turn on constraints
+constraint_activation: !!float 0.5
+
+# Loss hyperparameters
+
+# Target network hyperparameters
+gamma: 0.99
+lmbda: 0.5
+
+sub_batch_size: 64
+buffer_size: 102400
+
+# Optimization hyperparameters
+num_optim_epochs: 10
+lr: !!float 1e-2
+max_grad_norm: 10
+target_eps: !!float 0.99
