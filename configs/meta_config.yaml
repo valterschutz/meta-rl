@@ -21,8 +21,10 @@ gamma: 1
 
 # Optimization hyperparameters
 lr: !!float 1e-4
-num_optim_epochs: 20
-max_policy_grad_norm: 1
-max_value_grad_norm: 100
+num_optim_epochs: 5
+max_policy_grad_norm: 10
+max_value_grad_norm: 10
 clip_epsilon: 0.2
-entropy_eps: !!float 1e-4 # TODO: check what this is
+use_entropy: true
+entropy_coef: !!float 1e-1 # TODO: check what this is
+critic_coef: 1.0

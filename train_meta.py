@@ -160,7 +160,9 @@ meta_agent = MetaAgent(
     gamma=meta_config["gamma"],
     hidden_units=meta_config["hidden_units"],
     clip_epsilon=meta_config["clip_epsilon"],
-    entropy_eps=meta_config["entropy_eps"],
+    use_entropy=meta_config["use_entropy"],
+    entropy_coef=meta_config["entropy_coef"],
+    critic_coef=meta_config["critic_coef"],
 )
 
 pbar = tqdm(total=meta_total_steps)
@@ -233,6 +235,7 @@ try:
 
             log_dict1 = {
                 "step": j,
+                "base_true_mean_reward": meta_td["base_true_mean_reward"].item(),
                 "base_mean_reward": meta_td["base_mean_reward"].item(),
                 "base_std_reward": meta_td["base_std_reward"].item(),
                 "last_action": meta_td["last_action"].item(),

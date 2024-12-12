@@ -66,7 +66,9 @@ class MetaAgent:
         gamma,
         hidden_units,
         clip_epsilon,
-        entropy_eps,
+        use_entropy,
+        entropy_coef,
+        critic_coef,
         policy_module_state_dict=None,
         value_module_state_dict=None,
         mode="train",
@@ -85,7 +87,9 @@ class MetaAgent:
         self.gamma = gamma
         self.hidden_units = hidden_units
         self.clip_epsilon = clip_epsilon
-        self.entropy_eps = entropy_eps
+        self.use_entropy = use_entropy
+        self.entropy_coef = entropy_coef
+        self.critic_coef = critic_coef
 
         self.replay_buffer = ReplayBuffer(
             storage=LazyTensorStorage(max_size=buffer_size, device=self.device),
@@ -104,8 +108,8 @@ class MetaAgent:
         policy_module_state_dict=None,
         value_module_state_dict=None,
     ):
-        # state_keys = ["base_mean_reward", "last_action", "step"]
-        state_keys = ["step"]
+        state_keys = ["base_true_mean_reward"]
+        # state_keys = ["step"]
         n_states = len(state_keys)
         # state_keys = ["step"]
 
@@ -150,9 +154,9 @@ class MetaAgent:
             actor_network=self.policy_module,
             critic_network=self.value_module,
             clip_epsilon=self.clip_epsilon,
-            entropy_bonus=bool(self.entropy_eps),
-            entropy_coef=self.entropy_eps,
-            critic_coef=1.0,
+            entropy_bonus=self.use_entropy,
+            entropy_coef=self.entropy_coef,
+            critic_coef=self.critic_coef,
             loss_critic_type="smooth_l1",
         )
         self.advantage_module = TD0Estimator(
@@ -250,6 +254,8 @@ class BaseAgent:
         lmbda,
         clip_epsilon,
         use_entropy,
+        entropy_coef,
+        critic_coef,
         mode="train",
     ):
         super().__init__()
@@ -268,6 +274,8 @@ class BaseAgent:
 
         self.clip_epsilon = clip_epsilon
         self.use_entropy = use_entropy
+        self.entropy_coef = entropy_coef
+        self.critic_coef = critic_coef
 
         self.replay_buffer = ReplayBuffer(
             storage=LazyTensorStorage(max_size=self.buffer_size, device=self.device),
@@ -330,6 +338,8 @@ class BaseAgent:
             critic_network=self.value_module,
             clip_epsilon=self.clip_epsilon,
             entropy_bonus=self.use_entropy,
+            entropy_coef=self.entropy_coef,
+            critic_coef=self.critic_coef,
         )
 
         self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)

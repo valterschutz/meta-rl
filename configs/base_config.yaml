@@ -1,10 +1,10 @@
 device: "cpu"
 
 # How long to train
-total_frames: 2000
+total_frames: 8000
 
 # How many frames per batch
-batch_size: 4
+batch_size: 40
 
 # Base environment configuration
 n_states: 20
@@ -15,12 +15,14 @@ punishment: 0.0
 rollout_timeout: 200
 
 # How to switch the constraint
-no_weight_fraction: 0.99
-full_weight_fraction: 1.0
+no_weight_fraction: 0.2
+full_weight_fraction: 0.8
 
 # Loss hyperparameters
 clip_epsilon: 0.2
-use_entropy: false
+use_entropy: true
+entropy_coef: 0.01
+critic_coef: 1.0
 
 # Target network hyperparameters
 gamma: 0.99
@@ -29,6 +31,6 @@ lmbda: 0.5
 sub_batch_size: 4
 
 # Optimization hyperparameters
-num_optim_epochs: 4
-lr: !!float 1e-2
+num_optim_epochs: 10
+lr: !!float 5e-3
 max_grad_norm: 1
