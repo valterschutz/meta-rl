@@ -326,6 +326,7 @@ class MetaEnv(EnvBase):
         return TensorDict(
             {
                 "constant": torch.tensor([42.0], dtype=torch.float32),  # For debugging
+                "base_true_mean_reward": torch.tensor([0.0], dtype=torch.float32),
                 "base_mean_reward": torch.tensor([0.0], dtype=torch.float32),
                 "base_std_reward": torch.tensor([0.0], dtype=torch.float32),
                 "last_action": torch.tensor([0], dtype=torch.float32),
@@ -378,9 +379,10 @@ class MetaEnv(EnvBase):
 
         # Get next base batch and update base agent
         base_td = next(self.base_iter)
+        next_meta_td["base_true_mean_reward"] = base_td["next", "true_reward"].mean(0)
         next_meta_td["base_mean_reward"] = base_td["next", "reward"].mean(0)
         next_meta_td["base_std_reward"] = base_td["next", "reward"].std(0)
-        next_meta_td["last_action"] = meta_td["action"]
+        next_meta_td["last_action"] = meta_td["action"].detach()  # Note detach
         next_meta_td["reward"] = base_td["next", "true_reward"].mean(0)
         base_losses, base_grad_norm = self.base_agent.process_batch(base_td)
         next_meta_td["done"] = not self.is_batches_remaining(self.base_iter)
@@ -407,6 +409,7 @@ class MetaEnv(EnvBase):
         self.observation_spec = Composite(
             constant=Unbounded(shape=(1,), dtype=torch.float32),
             # The state
+            base_true_mean_reward=Unbounded(shape=(1,), dtype=torch.float32),
             base_mean_reward=Unbounded(shape=(1,), dtype=torch.float32),
             base_std_reward=Unbounded(shape=(1,), dtype=torch.float32),
             last_action=Bounded(low=0, high=1, shape=(1,), dtype=torch.float32),
@@ -435,6 +438,7 @@ class MetaEnv(EnvBase):
         )
         self.state_spec = Composite(
             constant=Unbounded(shape=(1,), dtype=torch.float32),
+            base_true_mean_reward=Unbounded(shape=(1,), dtype=torch.float32),
             base_mean_reward=Unbounded(shape=(1,), dtype=torch.float32),
             base_std_reward=Unbounded(shape=(1,), dtype=torch.float32),
             last_action=Bounded(low=0, high=1, shape=(1,), dtype=torch.float32),

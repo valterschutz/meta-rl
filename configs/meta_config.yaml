@@ -1,10 +1,10 @@
 device: "cpu"
 policy_module_name: "policy_module"
-qvalue_module_name: "qvalue_module"
+value_module_name: "value_module"
 rollout_timeout: 999999
 
 # How long to train
-train_episodes: 1000
+train_episodes: 100
 eval_episodes: 10
 
 # How often to log expensive metrics
@@ -14,23 +14,17 @@ expensive_log_interval: 100
 hidden_units: 32
 
 # Target network hyperparameters
-target_eps: 0.99
 gamma: 1
 
 # Sampling/buffer hyperparameters
-# TODO: buffer sizes in terms of episodes
-# buffer_size: 1_000 # Will be equal to ten episodes of base agent training
-# min_buffer_size: # Will be equal to two episodes of base agent training
-sub_batch_size: 10
-# replay_alpha: 1.0
-replay_alpha: 0.7
-replay_beta: 0.5
+# sub_batch_size: 1
 
 # Optimization hyperparameters
-# policy_lr: !!float 1e-6
-policy_lr: !!float 1e-4
-# qvalue_lr: !!float 1e-8
-qvalue_lr: !!float 1e-4
-num_optim_epochs: 20
-max_policy_grad_norm: 1
-max_qvalue_grad_norm: 100
+lr: !!float 1e-4
+num_optim_epochs: 5
+max_policy_grad_norm: 10
+max_value_grad_norm: 10
+clip_epsilon: 0.2
+use_entropy: true
+entropy_coef: !!float 1e-1 # TODO: check what this is
+critic_coef: 1.0

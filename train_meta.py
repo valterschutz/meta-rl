@@ -133,11 +133,7 @@ with open(args.meta_config, "r", encoding="UTF-8") as f:
     meta_config = yaml.safe_load(f)
 meta_steps_per_episode = base_config["total_frames"] // base_config["batch_size"]
 meta_total_steps = meta_steps_per_episode * meta_config["train_episodes"]
-meta_buffer_size = 10 * meta_steps_per_episode
-meta_min_buffer_size = 1 * meta_steps_per_episode
 print(f"Meta steps per episode: {meta_steps_per_episode}")
-print(f"Buffer size: {meta_buffer_size}")
-print(f"Min buffer size: {meta_min_buffer_size}")
 
 base_env, base_agent, base_collector_fn = get_base_from_config(DictWrapper(base_config))
 
@@ -152,23 +148,21 @@ meta_env = MetaEnv(
 check_env_specs(meta_env)
 
 # Meta agent
-meta_agent = MetaAgent(
+meta_agent = PPOMetaAgent(
     state_spec=meta_env.state_spec,
     action_spec=meta_env.action_spec,
     num_optim_epochs=meta_config["num_optim_epochs"],
-    buffer_size=10 * meta_steps_per_episode,
-    min_buffer_size=2 * meta_steps_per_episode,
-    sub_batch_size=meta_config["sub_batch_size"],
+    buffer_size=base_config["batch_size"],
     device=meta_config["device"],
     max_policy_grad_norm=meta_config["max_policy_grad_norm"],
-    max_qvalue_grad_norm=meta_config["max_qvalue_grad_norm"],
-    policy_lr=meta_config["policy_lr"],
-    qvalue_lr=meta_config["qvalue_lr"],
+    max_value_grad_norm=meta_config["max_value_grad_norm"],
+    lr=meta_config["lr"],
     gamma=meta_config["gamma"],
     hidden_units=meta_config["hidden_units"],
-    target_eps=meta_config["target_eps"],
-    replay_alpha=meta_config["replay_alpha"],
-    replay_beta=meta_config["replay_beta"],
+    clip_epsilon=meta_config["clip_epsilon"],
+    use_entropy=meta_config["use_entropy"],
+    entropy_coef=meta_config["entropy_coef"],
+    critic_coef=meta_config["critic_coef"],
 )
 
 pbar = tqdm(total=meta_total_steps)
@@ -189,18 +183,15 @@ try:
     #     meta_steps_per_episode
     # )
     # For logging SSD of params during training
-    old_qvalue_params = get_params(meta_agent.qvalue_module)
+    old_value_params = get_params(meta_agent.value_module)
     old_policy_params = get_params(meta_agent.policy_module)
 
     for i in range(meta_config["train_episodes"]):
         meta_td = meta_env.reset()  # Resets base agent in meta environment
         for j in range(meta_steps_per_episode):
-            if not meta_agent.replay_ready:
-                meta_td = meta_env.rand_step(meta_td)
-            else:
-                meta_td = meta_agent.policy(meta_td)
-                meta_td = meta_env.step(meta_td)
-            meta_losses, meta_max_policy_grad_norm, meta_max_qvalue_grad_norm = (
+            meta_td = meta_agent.policy(meta_td)
+            meta_td = meta_env.step(meta_td)
+            meta_losses, meta_avg_policy_grad_norm, meta_avg_value_grad_norm = (
                 meta_agent.process_batch(meta_td.unsqueeze(0))
             )
             pbar.update(meta_td.numel())
@@ -208,11 +199,11 @@ try:
             if (i * meta_steps_per_episode + j) % meta_config[
                 "expensive_log_interval"
             ] == 0:
-                qvalue_params = get_params(meta_agent.qvalue_module)
+                value_params = get_params(meta_agent.value_module)
                 policy_params = get_params(meta_agent.policy_module)
-                qvalue_params_ssd = calc_ssd(old_qvalue_params, qvalue_params)
+                value_params_ssd = calc_ssd(old_value_params, value_params)
                 policy_params_ssd = calc_ssd(old_policy_params, policy_params)
-                old_qvalue_params = get_params(meta_agent.qvalue_module)
+                old_value_params = get_params(meta_agent.value_module)
                 old_policy_params = get_params(meta_agent.policy_module)
                 # Visualize policy probabilities and Q-values
                 # policy_td = meta_agent.policy_module(step_td)
@@ -236,7 +227,7 @@ try:
                     #         yticklabels=action_ticks,
                     #     )
                     # ),
-                    "Q-value params SSD": qvalue_params_ssd,
+                    "Value params SSD": value_params_ssd,
                     "Policy params SSD": policy_params_ssd,
                 }
             else:
@@ -244,10 +235,13 @@ try:
 
             log_dict1 = {
                 "step": j,
+                "base_true_mean_reward": meta_td["base_true_mean_reward"].item(),
                 "base_mean_reward": meta_td["base_mean_reward"].item(),
                 "base_std_reward": meta_td["base_std_reward"].item(),
                 "last_action": meta_td["last_action"].item(),
-                "action": meta_td["action"].item(),
+                "action (sampled)": meta_td["action"].item(),
+                "action (mean)": meta_td["loc"].item(),
+                "action (variance)": meta_td["scale"].item(),
                 "meta reward": meta_td["next", "reward"].item(),
                 "base loss_objective": meta_td[
                     "base", "losses", "loss_objective"
@@ -264,10 +258,11 @@ try:
             }
             if meta_losses is not None:
                 log_dict2 = {
-                    "meta loss_actor": meta_losses["loss_actor"].item(),
-                    "meta loss_qvalue": meta_losses["loss_qvalue"].item(),
-                    "meta max_policy_grad_norm": meta_max_policy_grad_norm,
-                    "meta max_qvalue_grad_norm": meta_max_qvalue_grad_norm,
+                    "meta loss_objective": meta_losses["loss_objective"].item(),
+                    "meta loss_critic": meta_losses["loss_critic"].item(),
+                    "meta loss_entropy": meta_losses["loss_entropy"].item(),
+                    "meta avg_policy_grad_norm": meta_avg_policy_grad_norm,
+                    "meta avg_value_grad_norm": meta_avg_value_grad_norm,
                 }
             else:
                 log_dict2 = {}
@@ -284,8 +279,8 @@ torch.save(
     meta_agent.policy_module.state_dict(),
     f"models/{meta_config['policy_module_name']}.pth",
 )
-print(f"Saving qvalue module to models/{meta_config['qvalue_module_name']}.pth")
+print(f"Saving value module to models/{meta_config['value_module_name']}.pth")
 torch.save(
-    meta_agent.qvalue_module.state_dict(),
-    f"models/{meta_config['qvalue_module_name']}.pth",
+    meta_agent.value_module.state_dict(),
+    f"models/{meta_config['value_module_name']}.pth",
 )

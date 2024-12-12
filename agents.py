@@ -49,30 +49,28 @@ from torchrl.modules import TruncatedNormal, OneHotCategorical
 
 import wandb
 
-from networks import MetaPolicyNet, MetaQValueNet
+from networks import MetaPolicyNet, MetaValueNet
 
 
-class MetaAgent:
+class PPOMetaAgent:
     def __init__(
         self,
         state_spec,
         action_spec,
         num_optim_epochs,
         buffer_size,
-        min_buffer_size,
-        sub_batch_size,
         device,
         max_policy_grad_norm,
-        max_qvalue_grad_norm,
-        policy_lr,
-        qvalue_lr,
+        max_value_grad_norm,
+        lr,
         gamma,
         hidden_units,
-        target_eps,
-        replay_alpha,
-        replay_beta,
+        clip_epsilon,
+        use_entropy,
+        entropy_coef,
+        critic_coef,
         policy_module_state_dict=None,
-        qvalue_module_state_dict=None,
+        value_module_state_dict=None,
         mode="train",
     ):
         super().__init__()
@@ -80,155 +78,158 @@ class MetaAgent:
         self.state_spec = state_spec
         self.action_spec = action_spec
 
-        self.buffer_size = buffer_size
-        self.min_buffer_size = min_buffer_size
         self.num_optim_epochs = num_optim_epochs
-        self.sub_batch_size = sub_batch_size
+        self.buffer_size = buffer_size
         self.device = device
         self.max_policy_grad_norm = max_policy_grad_norm
-        self.max_qvalue_grad_norm = max_qvalue_grad_norm
-        self.policy_lr = policy_lr
-        self.qvalue_lr = qvalue_lr
+        self.max_value_grad_norm = max_value_grad_norm
+        self.lr = lr
         self.gamma = gamma
         self.hidden_units = hidden_units
-        self.target_eps = target_eps
-        self.replay_alpha = replay_alpha
-        self.replay_beta = replay_beta
+        self.clip_epsilon = clip_epsilon
+        self.use_entropy = use_entropy
+        self.entropy_coef = entropy_coef
+        self.critic_coef = critic_coef
 
-        self.replay_buffer = TensorDictReplayBuffer(
-            storage=LazyTensorStorage(max_size=self.buffer_size, device=self.device),
-            sampler=PrioritizedSampler(
-                max_capacity=self.buffer_size,
-                alpha=self.replay_alpha,
-                beta=self.replay_beta,
-            ),
-            priority_key="td_error",
-            batch_size=self.sub_batch_size,
+        self.replay_buffer = ReplayBuffer(
+            storage=LazyTensorStorage(max_size=buffer_size, device=self.device),
+            sampler=SamplerWithoutReplacement(),
         )
-        self.replay_ready = (
-            False  # Set this to true once replay buffer has min_buffer_size elements
-        )
+
         self.reset(
             mode=mode,
             policy_module_state_dict=policy_module_state_dict,
-            qvalue_module_state_dict=qvalue_module_state_dict,
+            value_module_state_dict=value_module_state_dict,
         )
 
     def reset(
         self,
         mode: str,
         policy_module_state_dict=None,
-        qvalue_module_state_dict=None,
+        value_module_state_dict=None,
     ):
-        state_keys = ["base_mean_reward", "last_action", "step"]
+        # state_keys = ["base_true_mean_reward", "last_action"]  # Must haves
+        state_keys = ["last_action"]  # Sanity check?
+        # state_keys = ["step"]
         n_states = len(state_keys)
         # state_keys = ["step"]
 
         # Policy
         policy_net = MetaPolicyNet(n_states, self.hidden_units, self.device)
-        self.policy_module = Actor(
-            module=policy_net,
+        policy_module = TensorDictModule(
+            policy_net, in_keys=state_keys, out_keys=["loc", "scale"]
+        )
+        self.policy_module = ProbabilisticActor(
+            module=policy_module,
             spec=self.action_spec,
-            in_keys=state_keys,
+            in_keys=["loc", "scale"],
             out_keys=["action"],
+            distribution_class=TruncatedNormal,
+            distribution_kwargs={"low": 0.0, "high": 1.0},
+            default_interaction_type=InteractionType.RANDOM,
+            return_log_prob=True,
         )
         if policy_module_state_dict is not None:
             self.policy_module.load_state_dict(policy_module_state_dict)
 
-        # Action value
-        qvalue_net = MetaQValueNet(n_states, self.hidden_units, self.device)
-        self.qvalue_module = ValueOperator(
-            qvalue_net,
-            in_keys=(state_keys + ["action"]),
-            out_keys=["state_action_value"],
+        # Value
+        value_net = MetaValueNet(n_states, self.hidden_units, self.device)
+        self.value_module = ValueOperator(
+            value_net,
+            in_keys=state_keys,
+            out_keys=["state_value"],
         )
-        if qvalue_module_state_dict is not None:
-            self.qvalue_module.load_state_dict(qvalue_module_state_dict)
+        if value_module_state_dict is not None:
+            self.value_module.load_state_dict(value_module_state_dict)
 
         if mode == "train":
             self.policy_module.train()
-            self.qvalue_module.train()
+            self.value_module.train()
         elif mode == "eval":
             self.policy_module.eval()
-            self.qvalue_module.eval()
+            self.value_module.eval()
         else:
             raise ValueError(f"Unknown mode: {mode}")
 
-        self.loss_module = DDPGLoss(
+        self.loss_module = ClipPPOLoss(
             actor_network=self.policy_module,
-            value_network=self.qvalue_module,
+            critic_network=self.value_module,
+            clip_epsilon=self.clip_epsilon,
+            entropy_bonus=self.use_entropy,
+            entropy_coef=self.entropy_coef,
+            critic_coef=self.critic_coef,
+            loss_critic_type="smooth_l1",
         )
-        # self.loss_module.make_value_estimator(
-        #     ValueEstimators.TDLambda, gamma=self.gamma, lmbda=self.lmbda
-        # )  # Que?
-        self.loss_module.make_value_estimator(ValueEstimators.TD0, gamma=self.gamma)
-        self.policy_optim = torch.optim.Adam(
-            self.policy_module.parameters(), lr=self.policy_lr
+        self.advantage_module = TD0Estimator(
+            gamma=self.gamma, value_network=self.value_module
         )
-        self.qvalue_optim = torch.optim.Adam(
-            self.qvalue_module.parameters(), lr=self.qvalue_lr
-        )
-        self.target_updater = SoftUpdate(self.loss_module, eps=self.target_eps)
+        self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
+
         self.replay_buffer.empty()
-        self.replay_ready = False
 
     def policy(self, td):
         return self.policy_module(td)
 
     def process_batch(self, td, verbose=False):
         # Process a single batch of data and return losses and maximum grad norm
-        # times_to_sample = len(td) // self.sub_batch_size
-        max_policy_grad_norm = 0
-        max_qvalue_grad_norm = 0
-        losses_policy = []
-        losses_qvalue = []
-        self.replay_buffer.extend(td.clone().detach())  # Detach before extending
-        if not self.replay_ready:
-            if len(self.replay_buffer) >= self.min_buffer_size:
-                self.replay_ready = True
-            else:
-                return None, None, None
+        td["sample_log_prob"] = td["sample_log_prob"].detach()
+        td["action"] = td["action"].detach()
+        avg_policy_grad_norm = 0
+        avg_value_grad_norm = 0
+        losses_objective = []
+        losses_critic = []
+        losses_entropy = []
         for i in range(self.num_optim_epochs):
-            sub_base_td = self.replay_buffer.sample()
+            self.advantage_module(td)
+
+            sub_base_td = td.clone()
+
             loss_td = self.loss_module(sub_base_td)
 
-            # Actor loss
-            losses_policy.append(loss_td["loss_actor"].mean().item())
-            loss_td["loss_actor"].backward()
+            # Loss propagation
+            loss = (
+                loss_td["loss_objective"] + loss_td["loss_critic"] + loss_td["entropy"]
+            )
+            loss.backward()
+
+            # Log losses
+            losses_objective.append(loss_td["loss_objective"].mean().item())
+            losses_critic.append(loss_td["loss_critic"].mean().item())
+            losses_entropy.append(loss_td["loss_entropy"].mean().item())
+
+            # Policy gradient norm
             policy_grad_norm = nn.utils.clip_grad_norm_(
                 self.policy_module.parameters(), self.max_policy_grad_norm
             )
-            max_policy_grad_norm += (1 / (i + 1)) * (
-                policy_grad_norm.item() - max_policy_grad_norm
+            avg_policy_grad_norm += (1 / (i + 1)) * (
+                policy_grad_norm.item() - avg_policy_grad_norm
             )
-            self.policy_optim.step()
-            self.policy_optim.zero_grad()
 
-            # Q-value loss
-            losses_qvalue.append(loss_td["loss_value"].mean().item())
-            loss_td["loss_value"].backward()
-            qvalue_grad_norm = nn.utils.clip_grad_norm_(
-                self.qvalue_module.parameters(), self.max_qvalue_grad_norm
+            # Value gradient norm
+            value_grad_norm = nn.utils.clip_grad_norm_(
+                self.value_module.parameters(), self.max_value_grad_norm
             )
-            max_qvalue_grad_norm += (1 / (i + 1)) * (
-                qvalue_grad_norm.item() - max_qvalue_grad_norm
+            avg_value_grad_norm += (1 / (i + 1)) * (
+                value_grad_norm.item() - avg_value_grad_norm
             )
-            self.qvalue_optim.step()
-            self.qvalue_optim.zero_grad()
 
-            # Update replay buffer with new priorities
-            self.replay_buffer.update_tensordict_priority(sub_base_td)
+            self.optim.step()
+            self.optim.zero_grad()
 
-            self.target_updater.step()
         losses = TensorDict(
             {
-                "loss_actor": torch.tensor(
-                    sum(losses_policy) / len(losses_policy),
+                "loss_objective": torch.tensor(
+                    sum(losses_objective) / len(losses_objective),
                     device=self.device,
                     dtype=torch.float32,
                 ),
-                "loss_qvalue": torch.tensor(
-                    sum(losses_qvalue) / len(losses_qvalue),
+                "loss_critic": torch.tensor(
+                    sum(losses_critic) / len(losses_critic),
+                    device=self.device,
+                    dtype=torch.float32,
+                ),
+                "loss_entropy": torch.tensor(
+                    sum(losses_entropy) / len(losses_entropy),
                     device=self.device,
                     dtype=torch.float32,
                 ),
@@ -236,10 +237,10 @@ class MetaAgent:
             batch_size=(),
         )
 
-        return losses, max_policy_grad_norm, max_qvalue_grad_norm
+        return losses, avg_policy_grad_norm, avg_value_grad_norm
 
 
-class BaseAgent:
+class PPOBaseAgent:
     def __init__(
         self,
         state_spec,
@@ -254,6 +255,8 @@ class BaseAgent:
         lmbda,
         clip_epsilon,
         use_entropy,
+        entropy_coef,
+        critic_coef,
         mode="train",
     ):
         super().__init__()
@@ -272,6 +275,8 @@ class BaseAgent:
 
         self.clip_epsilon = clip_epsilon
         self.use_entropy = use_entropy
+        self.entropy_coef = entropy_coef
+        self.critic_coef = critic_coef
 
         self.replay_buffer = ReplayBuffer(
             storage=LazyTensorStorage(max_size=self.buffer_size, device=self.device),
@@ -334,6 +339,8 @@ class BaseAgent:
             critic_network=self.value_module,
             clip_epsilon=self.clip_epsilon,
             entropy_bonus=self.use_entropy,
+            entropy_coef=self.entropy_coef,
+            critic_coef=self.critic_coef,
         )
 
         self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)

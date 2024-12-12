@@ -38,7 +38,7 @@ def get_base_from_config(config):
     ).to(config.device)
     check_env_specs(env)
 
-    agent = BaseAgent(
+    agent = PPOBaseAgent(
         state_spec=env.state_spec,
         action_spec=env.action_spec,
         num_optim_epochs=config.num_optim_epochs,
@@ -51,6 +51,8 @@ def get_base_from_config(config):
         lmbda=config.lmbda,
         clip_epsilon=config.clip_epsilon,
         use_entropy=config.use_entropy,
+        entropy_coef=config.entropy_coef,
+        critic_coef=config.critic_coef,
     )
 
     collector_fn = lambda: SyncDataCollector(
