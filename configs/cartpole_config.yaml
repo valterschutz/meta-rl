@@ -13,13 +13,13 @@ constraint_activation: !!float 0.5
 
 # Target network hyperparameters
 gamma: 0.99
-lmbda: 0.5
 
 sub_batch_size: 64
 buffer_size: 102400
 
 # Optimization hyperparameters
 num_optim_epochs: 10
-lr: !!float 1e-2
+policy_lr: !!float 1e-2
+qvalue_lr: !!float 1e-2
 max_grad_norm: 10
 target_eps: !!float 0.99

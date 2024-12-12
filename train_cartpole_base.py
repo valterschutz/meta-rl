@@ -16,6 +16,7 @@ from torchrl.envs.transforms import (
     DoubleToFloat,
     Compose,
     Reward2GoTransform,
+    RenameTransform,
 )
 from torchrl.collectors import SyncDataCollector
 from tqdm import tqdm
@@ -39,6 +40,9 @@ def train_base(config, interactive=None):
                 in_keys=["position", "velocity"], out_key="state", del_keys=False
             ),
             DoubleToFloat(in_keys=["state"]),
+            RenameTransform(
+                in_keys=["reward"], out_keys=["normal_reward"], create_copy=True
+            ),
             constraint_transform,
         ),
     )
@@ -52,9 +56,9 @@ def train_base(config, interactive=None):
         sub_batch_size=config["sub_batch_size"],
         device=config["device"],
         max_grad_norm=config["max_grad_norm"],
-        lr=config["lr"],
+        policy_lr=config["policy_lr"],
+        qvalue_lr=config["qvalue_lr"],
         gamma=config["gamma"],
-        lmbda=config["lmbda"],
         target_eps=config["target_eps"],
         mode="train",
     )
@@ -89,27 +93,6 @@ def train_base(config, interactive=None):
     prev_qvalue_weights = {
         name: param.clone() for name, param in agent.qvalue_module.named_parameters()
     }
-    repr_sample1 = env.reset()
-    repr_sample2 = repr_sample1.clone()
-    repr_sample1["action"] = torch.tensor([0.42], device=config["device"])
-    repr_sample2["action"] = torch.tensor([0.9], device=config["device"])
-    repr_sample1 = agent.qvalue_module(repr_sample1)
-    repr_sample2 = agent.qvalue_module(repr_sample2)
-    loss = (
-        repr_sample1["state_action_value"] - repr_sample2["state_action_value"]
-    ) ** 2
-    loss.backward()
-    print("loss: ", loss)
-    agent.optim.step()
-    agent.optim.zero_grad()
-    # repr_td = repr_sample.clone()
-    # repr_td = agent.qvalue_module(repr_td)
-    # Calculate difference in Q-value weights
-    qvalue_ssd = sum(
-        torch.sum((param - prev_qvalue_weights[name]) ** 2).item()
-        for name, param in agent.qvalue_module.named_parameters()
-    )
-    print("Qvalue ssd: ", qvalue_ssd)
 
     for td in collector:
         losses, max_grad_norm = agent.process_batch(td)

@@ -485,9 +485,9 @@ class CartpoleAgent:
         sub_batch_size,
         device,
         max_grad_norm,
-        lr,
+        policy_lr,
+        qvalue_lr,
         gamma,
-        lmbda,
         target_eps,
         mode="train",
     ):
@@ -502,9 +502,9 @@ class CartpoleAgent:
         self.sub_batch_size = sub_batch_size
         self.device = device
         self.max_grad_norm = max_grad_norm
-        self.lr = lr
+        self.policy_lr = policy_lr
+        self.qvalue_lr = qvalue_lr
         self.gamma = gamma
-        self.lmbda = lmbda
         self.target_eps = target_eps
 
         self.replay_buffer = TensorDictReplayBuffer(
@@ -559,11 +559,13 @@ class CartpoleAgent:
                 x = torch.cat((state, action), dim=-1)
                 return self.net(x)
 
-        qvalue_net = QValueNet(self.n_states, self.n_actions, critic_hidden_units).to(
-            self.device
-        )
+        self.qvalue_net = QValueNet(
+            self.n_states, self.n_actions, critic_hidden_units
+        ).to(self.device)
         self.qvalue_module = ValueOperator(
-            qvalue_net, in_keys=["state", "action"], out_keys=["state_action_value"]
+            self.qvalue_net,
+            in_keys=["state", "action"],
+            out_keys=["state_action_value"],
         )
 
         if mode == "train":
@@ -582,7 +584,12 @@ class CartpoleAgent:
         self.loss_module.make_value_estimator(gamma=self.gamma)
         self.target_updater = SoftUpdate(self.loss_module, eps=self.target_eps)
 
-        self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
+        self.policy_optim = torch.optim.Adam(
+            self.policy_module.parameters(), lr=self.policy_lr
+        )
+        self.qvalue_optim = torch.optim.Adam(
+            self.qvalue_module.parameters(), lr=self.qvalue_lr
+        )
         self.replay_buffer.empty()
 
         self.use_constraints = False
@@ -598,12 +605,12 @@ class CartpoleAgent:
             # sub_base_td = self.replay_buffer.sample(self.sub_batch_size)
             sub_base_td = td
             if self.use_constraints:
-                sub_base_td["next", "true_reward"] = (
-                    sub_base_td["next", "reward"]
+                sub_base_td["next", "reward"] = (
+                    sub_base_td["next", "normal_reward"]
                     + sub_base_td["next", "constraint_reward"]
                 )
             else:
-                sub_base_td["next", "true_reward"] = sub_base_td["next", "reward"]
+                sub_base_td["next", "reward"] = sub_base_td["next", "normal_reward"]
 
             loss_td = self.loss_module(sub_base_td)
             loss = (
@@ -617,9 +624,11 @@ class CartpoleAgent:
                 self.loss_module.parameters(), self.max_grad_norm
             )
             max_grad_norm = max(grad_norm.item(), max_grad_norm)
-            self.optim.step()
+            # self.policy_optim.step()
+            # self.policy_optim.zero_grad()
+            self.qvalue_optim.step()
+            self.qvalue_optim.zero_grad()
             self.target_updater.step()
-            self.optim.zero_grad()
         losses = TensorDict(
             {
                 "loss_actor": torch.tensor(
