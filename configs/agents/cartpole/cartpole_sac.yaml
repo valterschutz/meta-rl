@@ -1,10 +1,10 @@
 
-device: "cpu"
+device: "cuda:0"
 
 # How many frames per batch
 batch_size: 1_000
 # How long to train
-total_frames: 1000_000
+total_frames: 1_000_000
 
 # When to turn on constraints
 constraint_activation: !!float 0.5
@@ -15,11 +15,10 @@ constraint_activation: !!float 0.5
 gamma: 0.99
 
 sub_batch_size: 100
-buffer_size: 100_000
+buffer_size: 1_000_000 # Same as SAC paper
 
 # Optimization hyperparameters
 num_optim_epochs: 10
-policy_lr: !!float 1e-3
-qvalue_lr: !!float 1e-3
+lr: !!float 3e-4 # Same as SAC paper
 max_grad_norm: 10
-target_eps: !!float 0.99
+target_eps: !!float 0.995 # Same as SAC paper

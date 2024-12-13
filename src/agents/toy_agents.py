@@ -3,6 +3,10 @@ import tensordict
 import torch.nn as nn
 import torch.nn.functional as F
 
+from pathlib import Path
+
+import yaml
+
 from abc import ABC, abstractmethod
 from typing import Optional
 
@@ -242,10 +246,11 @@ class PPOMetaAgent:
         return losses, avg_policy_grad_norm, avg_value_grad_norm
 
 
-class PPOBaseAgent:
+class DDPGToyAgent:
     def __init__(
         self,
-        state_spec,
+        n_states,
+        n_actions,
         action_spec,
         num_optim_epochs,
         buffer_size,
@@ -254,16 +259,13 @@ class PPOBaseAgent:
         max_grad_norm,
         lr,
         gamma,
-        lmbda,
-        clip_epsilon,
-        use_entropy,
-        entropy_coef,
-        critic_coef,
+        target_eps,
         mode="train",
     ):
         super().__init__()
 
-        self.state_spec = state_spec
+        self.n_states = n_states
+        self.n_actions = n_actions
         self.action_spec = action_spec
 
         self.buffer_size = buffer_size
@@ -273,16 +275,11 @@ class PPOBaseAgent:
         self.max_grad_norm = max_grad_norm
         self.lr = lr
         self.gamma = gamma
-        self.lmbda = lmbda
+        self.target_eps = target_eps
 
-        self.clip_epsilon = clip_epsilon
-        self.use_entropy = use_entropy
-        self.entropy_coef = entropy_coef
-        self.critic_coef = critic_coef
-
-        self.replay_buffer = ReplayBuffer(
-            storage=LazyTensorStorage(max_size=self.buffer_size, device=self.device),
-            sampler=SamplerWithoutReplacement(),
+        self.replay_buffer = TensorDictReplayBuffer(
+            batch_size=sub_batch_size,
+            storage=LazyTensorStorage(max_size=buffer_size, device=self.device),
         )
 
         self.reset(
@@ -296,103 +293,108 @@ class PPOBaseAgent:
         self,
         mode: str,
     ):
-        n_states = self.state_spec["state"].n
-        n_actions = self.action_spec.n
-
         # Policy
-        actor_net = nn.Sequential(nn.Linear(n_states, n_actions)).to(self.device)
-        policy_module = TensorDictModule(
-            actor_net, in_keys=["state"], out_keys=["logits"]
-        )
-        self.policy_module = ProbabilisticActor(
-            module=policy_module,
-            spec=self.action_spec,
-            in_keys=["logits"],
-            distribution_class=OneHotCategorical,
-            default_interaction_type=InteractionType.RANDOM,
-            return_log_prob=True,
+        # actor_hidden_units = 256
+        actor_net = nn.Sequential(
+            # nn.Linear(self.n_states, actor_hidden_units),
+            # nn.ReLU(),
+            nn.Linear(actor_hidden_units, actor_hidden_units),
+            nn.ReLU(),
+            nn.Linear(actor_hidden_units, 2 * self.n_actions),
+            NormalParamExtractor(),
+        ).to(self.device)
+        self.policy_module = TensorDictModule(
+            actor_net, in_keys=["state"], out_keys=["loc", "scale"]
         )
 
         # Critic
-        value_net = nn.Sequential(
-            nn.Linear(n_states, 1),
+        critic_hidden_units = 256
+
+        class QValueNet(nn.Module):
+            def __init__(self, n_states, n_actions, hidden_units):
+                super().__init__()
+                self.net = nn.Sequential(
+                    nn.Linear(n_states + n_actions, hidden_units),
+                    nn.ReLU(),
+                    nn.Linear(hidden_units, hidden_units),
+                    nn.ReLU(),
+                    nn.Linear(hidden_units, 1),
+                )
+
+            def forward(self, state, action):
+                x = torch.cat((state, action), dim=-1)
+                return self.net(x)
+
+        self.qvalue_net = QValueNet(
+            self.n_states, self.n_actions, critic_hidden_units
         ).to(self.device)
-        self.value_module = ValueOperator(
-            value_net, in_keys=["state"], out_keys=["state_value"]
+        self.qvalue_module = ValueOperator(
+            self.qvalue_net,
+            in_keys=["state", "action"],
+            out_keys=["state_action_value"],
         )
 
         if mode == "train":
             self.policy_module.train()
-            self.value_module.train()
+            self.qvalue_module.train()
         elif mode == "eval":
             self.policy_module.eval()
-            self.value_module.eval()
+            self.qvalue_module.eval()
         else:
             raise ValueError(f"Unknown mode: {mode}")
 
-        self.advantage_module = GAE(
-            gamma=self.gamma,
-            lmbda=self.lmbda,
-            value_network=self.value_module,
-        )
-
-        self.loss_module = ClipPPOLoss(
+        self.loss_module = SACLoss(
             actor_network=self.policy_module,
-            critic_network=self.value_module,
-            clip_epsilon=self.clip_epsilon,
-            entropy_bonus=self.use_entropy,
-            entropy_coef=self.entropy_coef,
-            critic_coef=self.critic_coef,
+            qvalue_network=self.qvalue_module,
         )
+        self.loss_module.make_value_estimator(gamma=self.gamma)
+        self.target_updater = SoftUpdate(self.loss_module, eps=self.target_eps)
 
         self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
         self.replay_buffer.empty()
 
-    def process_batch(self, td, verbose=False):
-        # Process a single batch of data and return losses and maximum grad norm
-        times_to_sample = len(td) // self.sub_batch_size
-        max_grad_norm = 0
-        losses_objective = []
-        losses_critic = []
-        losses_entropy = []
-        for i in range(self.num_optim_epochs):
-            self.advantage_module(td)
-            self.replay_buffer.extend(td.clone().detach())  # Detach before extending
-            for j in range(times_to_sample):
-                sub_base_td = self.replay_buffer.sample(self.sub_batch_size)
+        self.use_constraints = False
 
-                self.optim.zero_grad()
-                loss_td = self.loss_module(sub_base_td)
-                loss = (
-                    loss_td["loss_objective"]
-                    + loss_td["loss_critic"]
-                    + (0 if not self.use_entropy else loss_td["loss_entropy"])
+    def process_batch(self, td, verbose=False):
+        self.replay_buffer.extend(td.clone().detach())  # Detach before extending
+        max_grad_norm = 0
+        losses_actor = []
+        losses_value = []
+        for i in range(self.num_optim_epochs):
+            # for i in range(1):
+            sub_base_td = self.replay_buffer.sample(self.sub_batch_size)
+            sub_base_td = td
+            if self.use_constraints:
+                sub_base_td["next", "reward"] = (
+                    sub_base_td["next", "normal_reward"]
+                    + sub_base_td["next", "constraint_reward"]
                 )
-                losses_objective.append(loss_td["loss_objective"].mean().item())
-                losses_critic.append(loss_td["loss_critic"].mean().item())
-                losses_entropy.append(
-                    0 if not self.use_entropy else loss_td["loss_entropy"].mean().item()
-                )
-                loss.backward()
-                grad_norm = nn.utils.clip_grad_norm_(
-                    self.loss_module.parameters(), self.max_grad_norm
-                )
-                max_grad_norm = max(grad_norm.item(), max_grad_norm)
-                self.optim.step()
+            else:
+                sub_base_td["next", "reward"] = sub_base_td["next", "normal_reward"]
+
+            loss_td = self.loss_module(sub_base_td)
+            loss = loss_td["loss_actor"] + loss_td["loss_value"]
+            losses_actor.append(loss_td["loss_actor"].mean().item())
+            losses_value.append(loss_td["loss_value"].mean().item())
+            loss.backward()
+            grad_norm = nn.utils.clip_grad_norm_(
+                self.loss_module.parameters(), self.max_grad_norm
+            )
+            max_grad_norm = max(grad_norm.item(), max_grad_norm)
+
+            self.optim.step()
+            self.optim.zero_grad()
+
+            self.target_updater.step()
         losses = TensorDict(
             {
-                "loss_objective": torch.tensor(
-                    sum(losses_objective) / len(losses_objective),
+                "loss_actor": torch.tensor(
+                    sum(losses_actor) / len(losses_actor),
                     device=self.device,
                     dtype=torch.float32,
                 ),
-                "loss_critic": torch.tensor(
-                    sum(losses_critic) / len(losses_critic),
-                    device=self.device,
-                    dtype=torch.float32,
-                ),
-                "loss_entropy": torch.tensor(
-                    sum(losses_entropy) / len(losses_entropy),
+                "loss_value": torch.tensor(
+                    sum(losses_value) / len(losses_value),
                     device=self.device,
                     dtype=torch.float32,
                 ),
@@ -400,7 +402,7 @@ class PPOBaseAgent:
             batch_size=(),
         )
 
-        return losses, max_grad_norm
+        return losses
 
 
 class ValueIterationAgent:
@@ -472,190 +474,3 @@ def fast_policy(td):
     else:
         td["action"] = torch.tensor([0, 1, 0, 0], device=td.device)
     return td
-
-
-class CartpoleAgent:
-    def __init__(
-        self,
-        n_states,
-        n_actions,
-        action_spec,
-        num_optim_epochs,
-        buffer_size,
-        sub_batch_size,
-        device,
-        max_grad_norm,
-        policy_lr,
-        qvalue_lr,
-        gamma,
-        target_eps,
-        mode="train",
-    ):
-        super().__init__()
-
-        self.n_states = n_states
-        self.n_actions = n_actions
-        self.action_spec = action_spec
-
-        self.buffer_size = buffer_size
-        self.num_optim_epochs = num_optim_epochs
-        self.sub_batch_size = sub_batch_size
-        self.device = device
-        self.max_grad_norm = max_grad_norm
-        self.policy_lr = policy_lr
-        self.qvalue_lr = qvalue_lr
-        self.gamma = gamma
-        self.target_eps = target_eps
-
-        self.replay_buffer = TensorDictReplayBuffer(
-            batch_size=sub_batch_size,
-            storage=LazyMemmapStorage(buffer_size),
-        )
-
-        self.reset(
-            mode=mode,
-        )
-
-    def policy(self, td):
-        return self.policy_module(td)
-
-    def reset(
-        self,
-        mode: str,
-    ):
-        # Policy
-        actor_hidden_units = 64
-        actor_net = nn.Sequential(
-            nn.Linear(self.n_states, actor_hidden_units),
-            nn.Tanh(),
-            nn.Linear(actor_hidden_units, 2 * self.n_actions),
-            NormalParamExtractor(),
-        ).to(self.device)
-        policy_module = TensorDictModule(
-            actor_net, in_keys=["state"], out_keys=["loc", "scale"]
-        )
-        self.policy_module = ProbabilisticActor(
-            module=policy_module,
-            spec=self.action_spec,
-            in_keys=["loc", "scale"],
-            distribution_class=TanhNormal,
-            default_interaction_type=InteractionType.RANDOM,
-            return_log_prob=True,
-        )
-
-        # Critic
-        critic_hidden_units = 64
-
-        class QValueNet(nn.Module):
-            def __init__(self, n_states, n_actions, hidden_units):
-                super().__init__()
-                self.net = nn.Sequential(
-                    nn.Linear(n_states + n_actions, hidden_units),
-                    nn.Tanh(),
-                    nn.Linear(hidden_units, 1),
-                )
-
-            def forward(self, state, action):
-                x = torch.cat((state, action), dim=-1)
-                return self.net(x)
-
-        self.qvalue_net = QValueNet(
-            self.n_states, self.n_actions, critic_hidden_units
-        ).to(self.device)
-        self.qvalue_module = ValueOperator(
-            self.qvalue_net,
-            in_keys=["state", "action"],
-            out_keys=["state_action_value"],
-        )
-
-        if mode == "train":
-            self.policy_module.train()
-            self.qvalue_module.train()
-        elif mode == "eval":
-            self.policy_module.eval()
-            self.qvalue_module.eval()
-        else:
-            raise ValueError(f"Unknown mode: {mode}")
-
-        self.loss_module = SACLoss(
-            actor_network=self.policy_module,
-            qvalue_network=self.qvalue_module,
-        )
-        self.loss_module.make_value_estimator(gamma=self.gamma)
-        self.target_updater = SoftUpdate(self.loss_module, eps=self.target_eps)
-
-        # self.policy_optim = torch.optim.Adam(
-        #     self.policy_module.parameters(), lr=self.policy_lr
-        # )
-        # self.qvalue_optim = torch.optim.Adam(
-        #     self.qvalue_module.parameters(), lr=self.qvalue_lr
-        # )
-        self.optim = torch.optim.Adam(
-            self.loss_module.parameters(), lr=self.policy_lr + self.qvalue_lr
-        )
-        self.replay_buffer.empty()
-
-        self.use_constraints = False
-
-    def process_batch(self, td, verbose=False):
-        self.replay_buffer.extend(td.clone().detach())  # Detach before extending
-        max_grad_norm = 0
-        losses_actor = []
-        losses_qvalue = []
-        losses_alpha = []
-        for i in range(self.num_optim_epochs):
-            # for i in range(1):
-            sub_base_td = self.replay_buffer.sample(self.sub_batch_size)
-            sub_base_td = td
-            if self.use_constraints:
-                sub_base_td["next", "reward"] = (
-                    sub_base_td["next", "normal_reward"]
-                    + sub_base_td["next", "constraint_reward"]
-                )
-            else:
-                sub_base_td["next", "reward"] = sub_base_td["next", "normal_reward"]
-
-            loss_td = self.loss_module(sub_base_td)
-            loss = (
-                loss_td["loss_actor"] + loss_td["loss_qvalue"] + loss_td["loss_alpha"]
-            )
-            losses_actor.append(loss_td["loss_actor"].mean().item())
-            losses_qvalue.append(loss_td["loss_qvalue"].mean().item())
-            losses_alpha.append(loss_td["loss_alpha"].mean().item())
-            loss.backward()
-            grad_norm = nn.utils.clip_grad_norm_(
-                self.loss_module.parameters(), self.max_grad_norm
-            )
-            max_grad_norm = max(grad_norm.item(), max_grad_norm)
-
-            # self.policy_optim.step()
-            # self.policy_optim.zero_grad()
-
-            # self.qvalue_optim.step()
-            # self.qvalue_optim.zero_grad()
-
-            self.optim.step()
-
-            self.target_updater.step()
-        losses = TensorDict(
-            {
-                "loss_actor": torch.tensor(
-                    sum(losses_actor) / len(losses_actor),
-                    device=self.device,
-                    dtype=torch.float32,
-                ),
-                "loss_qvalue": torch.tensor(
-                    sum(losses_qvalue) / len(losses_qvalue),
-                    device=self.device,
-                    dtype=torch.float32,
-                ),
-                "loss_alpha": torch.tensor(
-                    sum(losses_alpha) / len(losses_alpha),
-                    device=self.device,
-                    dtype=torch.float32,
-                ),
-            },
-            batch_size=(),
-        )
-
-        return losses, max_grad_norm

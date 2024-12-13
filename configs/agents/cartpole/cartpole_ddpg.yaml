@@ -1,0 +1,19 @@
+device: "cuda:0"
+
+# When to turn on constraints
+constraint_activation: !!float 0.5
+
+# Target network hyperparameters
+gamma: 0.99 # Same as DDPG paper
+
+sub_batch_size: 64 # Same as DDPG paper
+buffer_size: 1_000_000 # Same as DDPG paper
+
+# Loss
+target_eps: 0.999 # Same as SAC paper
+
+# Optimization hyperparameters
+num_optim_epochs: 10
+policy_lr: !!float 1e-4 # Same as DDPG paper
+qvalue_lr: !!float 1e-3 # Same as DDPG paper
+max_grad_norm: 10
