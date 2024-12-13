@@ -1,0 +1,14 @@
+device: "cuda:0"
+
+# Target network hyperparameters
+gamma: 0.99
+
+buffer_size: 1000
+sub_batch_size: 4
+
+# Optimization hyperparameters
+num_optim_epochs: 10
+policy_lr: !!float 5e-3
+qvalue_lr: !!float 5e-3
+max_grad_norm: 1
+target_eps: 0.99

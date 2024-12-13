@@ -10,34 +10,6 @@ from env import BaseEnv
 def get_base_from_config(config):
     """Returns a base environment, base agent, and data collector based on the config"""
 
-    # If batch_size > total_frames, set batch_size to total_frames
-    if config.batch_size > config.total_frames:
-        batch_size = config.total_frames
-    else:
-        batch_size = config.batch_size
-    # Assuming n_pos is even, calculate x and y
-    x, y = BaseEnv.calculate_xy(
-        config.n_states,
-        config.return_x,
-        config.return_y,
-        config.big_reward,
-        config.gamma,
-    )
-    # Base env
-    env = BaseEnv.get_base_env(
-        left_reward=x,
-        right_reward=x,
-        down_reward=y,
-        up_reward=y,
-        n_states=config.n_states,
-        big_reward=config.big_reward,
-        random_start=False,
-        punishment=config.punishment,
-        seed=None,
-        device=config.device,
-    ).to(config.device)
-    check_env_specs(env)
-
     agent = PPOBaseAgent(
         state_spec=env.state_spec,
         action_spec=env.action_spec,

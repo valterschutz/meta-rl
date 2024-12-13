@@ -27,12 +27,12 @@
             "justMyCode": false
         },
         {
-            "name": "Base debugger",
+            "name": "Toy debugger",
             "type": "debugpy",
             "request": "launch",
             "program": "${file}",
             "args": [
-                "configs/base_config.yaml",
+                "SAC",
             ],
             "console": "integratedTerminal",
             "justMyCode": false
