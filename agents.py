@@ -584,25 +584,28 @@ class CartpoleAgent:
         self.loss_module.make_value_estimator(gamma=self.gamma)
         self.target_updater = SoftUpdate(self.loss_module, eps=self.target_eps)
 
-        self.policy_optim = torch.optim.Adam(
-            self.policy_module.parameters(), lr=self.policy_lr
-        )
-        self.qvalue_optim = torch.optim.Adam(
-            self.qvalue_module.parameters(), lr=self.qvalue_lr
+        # self.policy_optim = torch.optim.Adam(
+        #     self.policy_module.parameters(), lr=self.policy_lr
+        # )
+        # self.qvalue_optim = torch.optim.Adam(
+        #     self.qvalue_module.parameters(), lr=self.qvalue_lr
+        # )
+        self.optim = torch.optim.Adam(
+            self.loss_module.parameters(), lr=self.policy_lr + self.qvalue_lr
         )
         self.replay_buffer.empty()
 
         self.use_constraints = False
 
     def process_batch(self, td, verbose=False):
-        # self.replay_buffer.extend(td.clone().detach())  # Detach before extending
+        self.replay_buffer.extend(td.clone().detach())  # Detach before extending
         max_grad_norm = 0
         losses_actor = []
         losses_qvalue = []
         losses_alpha = []
-        # for i in range(self.num_optim_epochs):
-        for i in range(1):
-            # sub_base_td = self.replay_buffer.sample(self.sub_batch_size)
+        for i in range(self.num_optim_epochs):
+            # for i in range(1):
+            sub_base_td = self.replay_buffer.sample(self.sub_batch_size)
             sub_base_td = td
             if self.use_constraints:
                 sub_base_td["next", "reward"] = (
@@ -624,10 +627,15 @@ class CartpoleAgent:
                 self.loss_module.parameters(), self.max_grad_norm
             )
             max_grad_norm = max(grad_norm.item(), max_grad_norm)
+
             # self.policy_optim.step()
             # self.policy_optim.zero_grad()
-            self.qvalue_optim.step()
-            self.qvalue_optim.zero_grad()
+
+            # self.qvalue_optim.step()
+            # self.qvalue_optim.zero_grad()
+
+            self.optim.step()
+
             self.target_updater.step()
         losses = TensorDict(
             {

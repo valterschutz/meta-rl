@@ -2,9 +2,9 @@
 device: "cpu"
 
 # How many frames per batch
-batch_size: 1024
+batch_size: 1_000
 # How long to train
-total_frames: 102400
+total_frames: 1000_000
 
 # When to turn on constraints
 constraint_activation: !!float 0.5
@@ -14,12 +14,12 @@ constraint_activation: !!float 0.5
 # Target network hyperparameters
 gamma: 0.99
 
-sub_batch_size: 64
-buffer_size: 102400
+sub_batch_size: 100
+buffer_size: 100_000
 
 # Optimization hyperparameters
 num_optim_epochs: 10
-policy_lr: !!float 1e-2
-qvalue_lr: !!float 1e-2
+policy_lr: !!float 1e-3
+qvalue_lr: !!float 1e-3
 max_grad_norm: 10
 target_eps: !!float 0.99

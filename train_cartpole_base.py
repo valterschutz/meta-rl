@@ -17,7 +17,9 @@ from torchrl.envs.transforms import (
     Compose,
     Reward2GoTransform,
     RenameTransform,
+    StepCounter,
 )
+from transforms import TrajCounter
 from torchrl.collectors import SyncDataCollector
 from tqdm import tqdm
 from agents import CartpoleAgent
@@ -43,9 +45,14 @@ def train_base(config, interactive=None):
             RenameTransform(
                 in_keys=["reward"], out_keys=["normal_reward"], create_copy=True
             ),
+            StepCounter(),
+            # TrajCounter(out_key="traj_count"),  # To count which episode we are on
             constraint_transform,
         ),
     )
+    # env.append_transform(TrajCounter())
+    # r = env.rollout(18, break_when_any_done=False)
+    # r["next", "traj_count"]
 
     agent = CartpoleAgent(
         n_states=5,
@@ -86,40 +93,8 @@ def train_base(config, interactive=None):
 
     pbar = tqdm(total=collector.total_frames)
 
-    # Initialize weight snapshots
-    prev_policy_weights = {
-        name: param.clone() for name, param in agent.policy_module.named_parameters()
-    }
-    prev_qvalue_weights = {
-        name: param.clone() for name, param in agent.qvalue_module.named_parameters()
-    }
-
-    for td in collector:
+    for i, td in enumerate(collector):
         losses, max_grad_norm = agent.process_batch(td)
-
-        # print("Qmodule output: ", repr_td["state_action_value"])
-        # agent.optim.step()
-        # agent.optim.zero_grad()
-
-        # Calculate weight changes
-        policy_ssd = sum(
-            torch.sum((param - prev_policy_weights[name]) ** 2).item()
-            for name, param in agent.policy_module.named_parameters()
-        )
-        qvalue_ssd = sum(
-            torch.sum((param - prev_qvalue_weights[name]) ** 2).item()
-            for name, param in agent.qvalue_module.named_parameters()
-        )
-
-        # Update previous weights for the next iteration
-        prev_policy_weights = {
-            name: param.clone()
-            for name, param in agent.policy_module.named_parameters()
-        }
-        prev_qvalue_weights = {
-            name: param.clone()
-            for name, param in agent.qvalue_module.named_parameters()
-        }
 
         wandb.log(
             {
@@ -130,9 +105,16 @@ def train_base(config, interactive=None):
                 "max_grad_norm": max_grad_norm,
                 "mean reward_to_go": np.mean(td["reward_to_go"].cpu().numpy()),
                 "mean constraint_to_go": np.mean(td["constraint_to_go"].cpu().numpy()),
-                "policy ssd": policy_ssd,
-                "qvalue ssd": qvalue_ssd,
+                "Q-value network norm": torch.norm(
+                    torch.stack(
+                        [
+                            torch.norm(p)
+                            for p in agent.loss_module.qvalue_network_params.parameters()
+                        ]
+                    )
+                ).item(),
                 "buffer size": len(agent.replay_buffer),
+                "Batch number": i,
             }
         )
         pbar.update(td.numel())

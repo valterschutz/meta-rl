@@ -12,13 +12,14 @@ actor_net = nn.Sequential(
     nn.Linear(1, 2),
     NormalParamExtractor(),
 )
+
 policy_module = TensorDictModule(
     actor_net, in_keys=["state"], out_keys=["loc", "scale"]
 )
 policy_module = ProbabilisticActor(
     module=policy_module,
     in_keys=["loc", "scale"],
-    out_keys=["action"],
+    # out_keys=["action"],
     distribution_class=TanhNormal,
     default_interaction_type=InteractionType.RANDOM,
     return_log_prob=True,
@@ -48,7 +49,9 @@ loss_module = SACLoss(
     qvalue_network=qvalue_module,
 )
 loss_module.make_value_estimator(gamma=0.9)
+
 optim = torch.optim.Adam(loss_module.parameters(), lr=1e-1)
+# NOTE guess you didn't care about target update right?
 
 td = TensorDict(
     {
@@ -60,20 +63,18 @@ td = TensorDict(
     }
 )
 
-# Print qvalue gradients before backprop
-print(f"Q-value gradients before backprop:")
-for param in loss_module.qvalue_network.parameters():
+print(f"Q-value parameters before backprop:")
+for param in loss_module.qvalue_network_params.parameters():
     print(param)
 
-for _ in range(10):
-    loss_td = loss_module(td)
-    loss = loss_td["loss_actor"] + loss_td["loss_qvalue"] + loss_td["loss_alpha"]
-    # Backprop
-    loss.backward()
-    optim.step()
-    optim.zero_grad()
+# Backprop
+# for _ in range(10):
+loss_td = loss_module(td)
+loss = loss_td["loss_actor"] + loss_td["loss_qvalue"] + loss_td["loss_alpha"]
+loss.backward()
+optim.step()
+optim.zero_grad()
 
-# Print qvalue gradients after backprop
-print(f"Q-value gradients after backprop:")
-for param in loss_module.qvalue_network.parameters():
+print(f"Q-value parameters after backprop:")
+for param in loss_module.qvalue_network_params.parameters():
     print(param)
