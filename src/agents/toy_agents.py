@@ -403,12 +403,11 @@ class DDPGToyAgent:
         return losses, max_grad_norm
 
 
-# TODO: loss_module thinks that "action" key is not present even though it is?
 class SACToyAgent:
     def __init__(
         self,
         n_states,
-        n_actions,
+        # n_actions,
         action_spec,
         num_optim_epochs,
         buffer_size,
@@ -424,8 +423,9 @@ class SACToyAgent:
         super().__init__()
 
         self.n_states = n_states
-        self.n_actions = n_actions
+        # self.n_actions = n_actions
         self.action_spec = action_spec
+        # self.n_actions = action_spec.n
 
         self.buffer_size = buffer_size
         self.num_optim_epochs = num_optim_epochs
@@ -437,9 +437,14 @@ class SACToyAgent:
         self.target_eps = target_eps
         self.target_entropy = target_entropy
 
-        self.replay_buffer = TensorDictReplayBuffer(
-            batch_size=sub_batch_size,
-            storage=LazyTensorStorage(max_size=buffer_size, device=self.device),
+        # TODO: use TensorDictReplayBuffer
+        # self.replay_buffer = TensorDictReplayBuffer(
+        #     batch_size=sub_batch_size,
+        #     storage=LazyTensorStorage(max_size=buffer_size, device=self.device),
+        #     sampler=SamplerWithoutReplacement(),
+        # )
+        self.replay_buffer = ReplayBuffer(
+            storage=LazyTensorStorage(max_size=self.buffer_size, device=self.device),
             sampler=SamplerWithoutReplacement(),
         )
 
@@ -454,13 +459,18 @@ class SACToyAgent:
         self,
         mode: str,
     ):
+        n_actions = self.action_spec.n
+        # Common hidden network for both policy and critic
+        hidden_units = 20
+        hidden_net = nn.Sequential(
+            nn.Linear(self.n_states, hidden_units),
+            nn.ReLU(),
+            nn.Linear(hidden_units, hidden_units),
+        ).to(self.device)
         # Policy
         actor_net = nn.Sequential(
-            nn.Linear(self.n_states, 128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, self.n_actions),
+            hidden_net,
+            nn.Linear(hidden_units, n_actions),
         ).to(self.device)
         policy_module = TensorDictModule(
             actor_net, in_keys=["state"], out_keys=["logits"]
@@ -475,21 +485,23 @@ class SACToyAgent:
         )
 
         # Critic
-        class QValueNet(nn.Module):
-            def __init__(self, n_states, n_actions):
-                super().__init__()
-                self.net = nn.Sequential(
-                    nn.Linear(n_states, 128),
-                    nn.ReLU(),
-                    nn.Linear(128, 128),
-                    nn.ReLU(),
-                    nn.Linear(128, n_actions),
-                )
+        # class QValueNet(nn.Module):
+        #     def __init__(self, n_states, n_actions):
+        #         super().__init__()
+        #         self.net = nn.Sequential(
+        #             nn.Linear(n_states, 128),
+        #             nn.ReLU(),
+        #             nn.Linear(128, 128),
+        #             nn.ReLU(),
+        #             nn.Linear(128, n_actions),
+        #         )
 
-            def forward(self, state):
-                return self.net(state)
+        #     def forward(self, state):
+        #         return self.net(state)
 
-        self.qvalue_net = QValueNet(self.n_states, self.n_actions).to(self.device)
+        self.qvalue_net = nn.Sequential(
+            hidden_net, nn.Linear(hidden_units, n_actions)
+        ).to(self.device)
         self.qvalue_module = ValueOperator(
             self.qvalue_net,
             in_keys=["state"],
@@ -509,8 +521,9 @@ class SACToyAgent:
             actor_network=self.policy_module,
             qvalue_network=self.qvalue_module,
             action_space=self.action_spec,
-            num_actions=self.n_actions,
-            fixed_alpha=True if self.target_entropy is not None else False,
+            num_actions=n_actions,
+            # fixed_alpha=True if self.target_entropy is not None else False, # TODO: uncomment
+            target_entropy=self.target_entropy,
         )
         self.loss_module.make_value_estimator(ValueEstimators.TD0, gamma=self.gamma)
         self.target_updater = SoftUpdate(self.loss_module, eps=self.target_eps)
@@ -529,13 +542,14 @@ class SACToyAgent:
         mean_entropy = []
         for i in range(self.num_optim_epochs):
             sub_base_td = self.replay_buffer.sample(self.sub_batch_size)
-            if self.use_constraints:
-                sub_base_td["next", "reward"] = (
-                    sub_base_td["next", "normal_reward"]
-                    + sub_base_td["next", "constraint_reward"]
-                )
-            else:
-                sub_base_td["next", "reward"] = sub_base_td["next", "normal_reward"]
+            # if self.use_constraints:
+            #     sub_base_td["next", "reward"] = (
+            #         sub_base_td["next", "normal_reward"]
+            #         + sub_base_td["next", "constraint_reward"]
+            #     )
+            # else:
+            #     sub_base_td["next", "reward"] = sub_base_td["next", "normal_reward"]
+            self.optim.zero_grad()
             loss_td = self.loss_module(sub_base_td)
             loss = (
                 loss_td["loss_actor"] + loss_td["loss_qvalue"] + loss_td["loss_alpha"]
@@ -551,7 +565,6 @@ class SACToyAgent:
             max_grad_norm = max(grad_norm.item(), max_grad_norm)
 
             self.optim.step()
-            self.optim.zero_grad()
 
             self.target_updater.step()
         losses = TensorDict(
@@ -653,12 +666,11 @@ def fast_policy(td):
     return td
 
 
-def get_toy_agent(agent_type, agent_config, action_spec):
+def get_toy_agent(agent_type, agent_config, env):
     if agent_type == "SAC":
         return SACToyAgent(
-            n_states=20,
-            n_actions=4,
-            action_spec=action_spec,
+            n_states=env.n_states,
+            action_spec=env.action_spec,
             num_optim_epochs=agent_config["num_optim_epochs"],
             buffer_size=agent_config["buffer_size"],
             sub_batch_size=agent_config["sub_batch_size"],
@@ -672,9 +684,8 @@ def get_toy_agent(agent_type, agent_config, action_spec):
         )
     elif agent_type == "DDPG":
         return DDPGToyAgent(
-            n_states=20,
-            n_actions=4,
-            action_spec=action_spec,
+            n_states=env.n_states,
+            action_spec=env.action_spec,
             num_optim_epochs=agent_config["num_optim_epochs"],
             buffer_size=agent_config["buffer_size"],
             sub_batch_size=agent_config["sub_batch_size"],

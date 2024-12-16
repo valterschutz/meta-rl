@@ -98,7 +98,7 @@ def main():
 
     env = get_toy_env(env_config, agent_config["gamma"])
 
-    agent = get_toy_agent(agent_type, agent_config, env.action_spec)
+    agent = get_toy_agent(agent_type, agent_config, env)
 
     collector = SyncDataCollector(
         env,
