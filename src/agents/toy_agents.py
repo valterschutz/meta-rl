@@ -31,6 +31,7 @@ from torchrl.modules.tensordict_module import (
     ValueOperator,
 )
 from torchrl.objectives import (
+    TD3Loss,
     A2CLoss,
     ClipPPOLoss,
     DDPGLoss,
@@ -597,6 +598,200 @@ class SACToyAgent:
         return losses, additional_info
 
 
+class TD3ToyAgent:
+    def __init__(
+        self,
+        n_states,
+        # n_actions,
+        action_spec,
+        num_optim_epochs,
+        buffer_size,
+        sub_batch_size,
+        device,
+        max_grad_norm,
+        lr,
+        gamma,
+        target_eps,
+        min_buffer_size,
+        mode="train",
+    ):
+        super().__init__()
+
+        self.n_states = n_states
+        # self.n_actions = n_actions
+        self.action_spec = action_spec
+        # self.n_actions = action_spec.n
+
+        self.buffer_size = buffer_size
+        self.min_buffer_size = min_buffer_size
+        self.num_optim_epochs = num_optim_epochs
+        self.sub_batch_size = sub_batch_size
+        self.device = device
+        self.max_grad_norm = max_grad_norm
+        self.lr = lr
+        self.gamma = gamma
+        self.target_eps = target_eps
+
+        self.replay_buffer = TensorDictReplayBuffer(
+            batch_size=sub_batch_size,
+            storage=LazyTensorStorage(max_size=buffer_size, device=self.device),
+            sampler=SamplerWithoutReplacement(),
+        )
+        # TODO: PRS
+        # self.replay_buffer = ReplayBuffer(
+        #     storage=LazyTensorStorage(max_size=self.buffer_size, device=self.device),
+        #     sampler=SamplerWithoutReplacement(),
+        # )
+
+        self.reset(
+            mode=mode,
+        )
+
+    def policy(self, td):
+        return self.policy_module(td)
+
+    def reset(
+        self,
+        mode: str,
+    ):
+        n_actions = self.action_spec.n
+
+        # Policy
+        class ActorNet(nn.Module):
+            def __init__(self, n_states, n_actions):
+                super().__init__()
+                self.actor_net = nn.Sequential(
+                    nn.Linear(n_states, n_actions),
+                )
+
+            def forward(self, state):
+                action = self.actor_net(state)
+                action_onehot = F.one_hot(
+                    action.argmax(dim=-1), num_classes=n_actions
+                ).to(torch.float32)
+                return action_onehot
+
+        actor_net = ActorNet(self.n_states, n_actions).to(self.device)
+        self.policy_module = Actor(
+            module=actor_net,
+            spec=self.action_spec,
+            in_keys=["state"],
+            out_keys=["action"],
+        )
+
+        class QValueNet(nn.Module):
+            def __init__(self, n_states, n_actions):
+                super().__init__()
+                self.qvalue_net = nn.Sequential(
+                    nn.Linear(n_states + n_actions, 1),
+                )
+
+            def forward(self, state, action):
+                x = torch.cat((state, action), dim=-1)
+                return self.qvalue_net(x)
+
+        self.qvalue_net = QValueNet(self.n_states, n_actions).to(self.device)
+        self.qvalue_module = ValueOperator(
+            self.qvalue_net,
+            in_keys=["state", "action"],
+            out_keys=["state_action_value"],
+        )
+
+        if mode == "train":
+            self.policy_module.train()
+            self.qvalue_module.train()
+        elif mode == "eval":
+            self.policy_module.eval()
+            self.qvalue_module.eval()
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
+
+        self.loss_module = TD3Loss(
+            actor_network=self.policy_module,
+            qvalue_network=self.qvalue_module,
+            # action_spec=self.action_spec,
+            bounds=(0.0, 1.0),
+            # num_actions=n_actions,
+            # fixed_alpha=use_target_entropy,
+            # target_entropy=(self.target_entropy if use_target_entropy else "auto"),
+            # loss_function="l2",
+            # delay_qvalue=True,
+        )
+        self.loss_module.make_value_estimator(ValueEstimators.TD0, gamma=self.gamma)
+        self.target_updater = SoftUpdate(self.loss_module, eps=self.target_eps)
+
+        # self.policy_optim = torch.optim.Adam(
+        #     self.loss_module.actor_network_params.parameters(), lr=self.lr
+        # )
+        # self.qvalue_optim = torch.optim.Adam(
+        #     self.loss_module.qvalue_network_params.parameters(), lr=self.lr
+        # )
+        self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
+        self.replay_buffer.empty()
+
+        self.use_constraints = False
+
+    def process_batch(self, td):
+        self.replay_buffer.extend(td.clone().detach())  # Detach before extending
+        if len(self.replay_buffer) < self.min_buffer_size:
+            return TensorDict(), {}
+        mean_policy_grad_norm = []
+        mean_qvalue_grad_norm = []
+        losses_actor = []
+        losses_qvalue = []
+        for i in range(self.num_optim_epochs):
+            sub_base_td = self.replay_buffer.sample(self.sub_batch_size)
+            if self.use_constraints:
+                sub_base_td["next", "reward"] = (
+                    sub_base_td["next", "normal_reward"]
+                    + sub_base_td["next", "constraint_reward"]
+                )
+            else:
+                sub_base_td["next", "reward"] = sub_base_td["next", "normal_reward"]
+            self.optim.zero_grad()
+            loss_td = self.loss_module(sub_base_td)
+            loss = loss_td["loss_actor"] + loss_td["loss_qvalue"]
+            losses_actor.append(loss_td["loss_actor"].mean().item())
+            losses_qvalue.append(loss_td["loss_qvalue"].mean().item())
+            loss.backward()
+
+            qvalue_grad_norm = nn.utils.clip_grad_norm_(
+                self.loss_module.qvalue_network_params.parameters(), self.max_grad_norm
+            )
+            mean_qvalue_grad_norm.append(qvalue_grad_norm.item())
+            policy_grad_norm = nn.utils.clip_grad_norm_(
+                self.loss_module.actor_network_params.parameters(), self.max_grad_norm
+            )
+            mean_policy_grad_norm.append(policy_grad_norm.item())
+
+            self.optim.step()
+
+            self.target_updater.step()
+        losses = TensorDict(
+            {
+                "loss_actor": torch.tensor(
+                    sum(losses_actor) / len(losses_actor),
+                    device=self.device,
+                    dtype=torch.float32,
+                ),
+                "loss_qvalue": torch.tensor(
+                    sum(losses_qvalue) / len(losses_qvalue),
+                    device=self.device,
+                    dtype=torch.float32,
+                ),
+            },
+            batch_size=(),
+        )
+        additional_info = {
+            "mean_policy_grad_norm": sum(mean_policy_grad_norm)
+            / len(mean_policy_grad_norm),
+            "mean_qvalue_grad_norm": sum(mean_qvalue_grad_norm)
+            / len(mean_qvalue_grad_norm),
+        }
+
+        return losses, additional_info
+
+
 class ValueIterationToyAgent:
     def __init__(self, env, gamma):
         self.env = env
@@ -698,5 +893,20 @@ def get_toy_agent(agent_type, agent_config, env):
             qvalue_lr=agent_config["qvalue_lr"],
             gamma=agent_config["gamma"],
             target_eps=agent_config["target_eps"],
+            mode="train",
+        )
+    elif agent_type == "TD3":
+        return TD3ToyAgent(
+            n_states=env.n_states,
+            action_spec=env.action_spec,
+            num_optim_epochs=agent_config["num_optim_epochs"],
+            buffer_size=agent_config["buffer_size"],
+            sub_batch_size=agent_config["sub_batch_size"],
+            device=agent_config["device"],
+            max_grad_norm=agent_config["max_grad_norm"],
+            lr=agent_config["lr"],
+            gamma=agent_config["gamma"],
+            target_eps=agent_config["target_eps"],
+            min_buffer_size=agent_config["min_buffer_size"],
             mode="train",
         )

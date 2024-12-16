@@ -91,6 +91,10 @@ def main():
         agent_type = "DDPG"
         with open("configs/agents/toy/toy_ddpg.yaml", encoding="UTF-8") as f:
             agent_config = yaml.safe_load(f)
+    elif sys.argv[1] == "TD3":
+        agent_type = "TD3"
+        with open("configs/agents/toy/toy_td3.yaml", encoding="UTF-8") as f:
+            agent_config = yaml.safe_load(f)
     else:
         raise ValueError("Invalid agent type. Choose either SAC or DDPG.")
     with open("configs/collectors/toy_collector.yaml", encoding="UTF-8") as f:
