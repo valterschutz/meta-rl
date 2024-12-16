@@ -47,15 +47,9 @@ from torchrl.objectives.value import GAE, TD0Estimator
 
 import wandb
 
-# from torchrl.modules import IndependentNormal
-
-# from utils import OneHotLayer, print_computational_graph
-
-
 import os
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from networks import MetaPolicyNet, MetaValueNet
 
 
 class PPOMetaAgent:
@@ -264,6 +258,7 @@ class OffpolicyAgent:
     sub_base_size: int  # Number of samples to draw from the replay buffer for each optimization step
     max_grad_norm: float
     target_updater: TargetNetUpdater
+    device: torch.device  # Where to store the replay buffer
 
     def __init__(
         self,
@@ -277,6 +272,7 @@ class OffpolicyAgent:
         optims,
         loss_keys,
         loss_module,
+        **kwargs,
     ):
         super().__init__()
 
@@ -290,6 +286,7 @@ class OffpolicyAgent:
         self.loss_keys = loss_keys
         self.loss_module = loss_module
         self.target_updater = target_updater
+        self.device = device
 
         self.replay_buffer = TensorDictReplayBuffer(
             batch_size=sub_batch_size,
