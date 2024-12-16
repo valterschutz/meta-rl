@@ -8,7 +8,7 @@ sub_batch_size: 4
 
 # Optimization hyperparameters
 num_optim_epochs: 10
-policy_lr: !!float 5e-3
-qvalue_lr: !!float 5e-3
+policy_lr: !!float 5e-5
+qvalue_lr: !!float 5e-5
 max_grad_norm: 1
 target_eps: 0.99

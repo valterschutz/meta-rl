@@ -26,23 +26,42 @@ def train(env, agent, collector):
 
     try:
         for i, td in enumerate(collector):
-            losses, max_grad_norm = agent.process_batch(td)
+            losses, additional_info = agent.process_batch(td)
+
+            qvalue_network_norm = sum(
+                (p**2).sum().item()
+                for p in agent.loss_module.qvalue_network_params.parameters()
+            )
+            policy_network_norm = sum(
+                (p**2).sum().item()
+                for p in agent.loss_module.actor_network_params.parameters()
+            )
 
             loss_dict = {k: v.item() for k, v in losses.items()}
             wandb.log(
                 {
                     **loss_dict,
+                    **additional_info,
                     "constraints": agent.use_constraints,
-                    "mean reward": np.mean(td["next", "reward"].cpu().numpy()),
-                    "max_grad_norm": max_grad_norm,
+                    "mean normal reward": np.mean(
+                        td["next", "normal_reward"].cpu().numpy()
+                    ),
+                    "mean constraint reward": np.mean(
+                        td["next", "constraint_reward"].cpu().numpy()
+                    ),
                     "buffer size": len(agent.replay_buffer),
                     "batch number": i,
                     "train state distribution": wandb.Histogram(
                         td["state"].cpu().numpy().argmax(-1)
                     ),
-                    "train reward distribution": wandb.Histogram(
-                        td["next", "reward"].cpu().numpy().argmax(-1)
+                    "train normal reward distribution": wandb.Histogram(
+                        td["next", "normal_reward"].cpu().numpy()
                     ),
+                    "train constraint reward distribution": wandb.Histogram(
+                        td["next", "constraint_reward"].cpu().numpy()
+                    ),
+                    "qvalue params norm": qvalue_network_norm,
+                    "policy params norm": policy_network_norm,
                 }
             )
             pbar.update(td.numel())

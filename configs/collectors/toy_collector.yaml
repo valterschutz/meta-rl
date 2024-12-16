@@ -1,7 +1,7 @@
-device: "cuda:0"
+device: "cpu"
 
 # How long to train
-total_frames: 10_000
+total_frames: 100_000
 
 # How many frames per batch
-batch_size: 40
+batch_size: 32

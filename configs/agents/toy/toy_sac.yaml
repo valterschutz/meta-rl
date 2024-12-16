@@ -1,13 +1,17 @@
-device: "cuda:0"
+device: "cpu"
 
 # Target network hyperparameters
 gamma: 0.99
 
-buffer_size: 1000
-sub_batch_size: 4
+buffer_size: 128
+sub_batch_size: 32
 
 # Optimization hyperparameters
 num_optim_epochs: 10
-lr: !!float 5e-3
+lr: !!float 1e-3
 max_grad_norm: 1
 target_eps: 0.99
+
+# Loss options
+# fixed_alpha: true
+target_entropy: 0.0

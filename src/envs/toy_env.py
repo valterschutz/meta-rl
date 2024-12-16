@@ -23,14 +23,11 @@ class ToyEnv(EnvBase):
         up_reward,
         n_states,
         big_reward,
+        constraints_active,
         random_start=False,
         # punishment=0,
         seed=None,
         device="cpu",
-        # left_weight=1.0,
-        # right_weight=1.0,
-        # down_weight=1.0,
-        # up_weight=1.0,
     ):
         super().__init__(device=device, batch_size=[])
 
@@ -42,11 +39,8 @@ class ToyEnv(EnvBase):
         self.n_states = n_states
         self.big_reward = big_reward
         self.random_start = random_start
-        # self.punishment = punishment
-        # self.left_weight = left_weight
-        # self.right_weight = right_weight
-        # self.down_weight = down_weight
-        # self.up_weight = up_weight
+
+        self.constraints_active = constraints_active
 
         self._make_spec()
         if seed is None:
@@ -56,6 +50,7 @@ class ToyEnv(EnvBase):
     def _make_spec(self):
         self.observation_spec = Composite(
             state=OneHot(self.n_states, shape=(self.n_states,), dtype=torch.float32),
+            normal_reward=UnboundedContinuous(shape=(1), dtype=torch.float32),
             constraint_reward=UnboundedContinuous(shape=(1), dtype=torch.float32),
             shape=(),
         )
@@ -65,7 +60,7 @@ class ToyEnv(EnvBase):
         )
 
         self.action_spec = OneHot(4, shape=(4,), dtype=torch.float32)
-        # The normal, sparse reward
+        # The sum of normal_reward and constraint_reward
         self.reward_spec = UnboundedContinuous(shape=(1,), dtype=torch.float32)
 
     def _reset(self, td):
@@ -91,6 +86,9 @@ class ToyEnv(EnvBase):
         out = TensorDict(
             {
                 "state": state,
+                "normal_reward": torch.zeros(
+                    shape, dtype=torch.float32, device=self.device
+                ).unsqueeze(-1),
                 "constraint_reward": torch.zeros(
                     shape, dtype=torch.float32, device=self.device
                 ).unsqueeze(-1),
@@ -111,40 +109,52 @@ class ToyEnv(EnvBase):
         action = torch.argmax(action, dim=-1)
 
         next_state = state.clone()
-        reward = 0 * torch.ones_like(state, dtype=torch.int, device=self.device)
+
+        normal_reward = 0 * torch.ones_like(
+            state, dtype=torch.float32, device=self.device
+        )
         constraint_reward = 0 * torch.ones_like(
-            state, dtype=torch.int, device=self.device
+            state, dtype=torch.float32, device=self.device
         )
 
         mask_even = state % 2 == 0
 
+        left_action = 0
+        right_action = 1
+        down_action = 2
+        up_action = 3
+
         # Enable left action by default
-        next_state = torch.where(action == 0, state - 1, next_state)
+        next_state = torch.where(action == left_action, state - 1, next_state)
         # Enable right action by default
-        next_state = torch.where(action == 1, state + 1, next_state)
+        next_state = torch.where(action == right_action, state + 1, next_state)
 
         # For even pos, enable down and up actions
         # Down action
-        next_state = torch.where(mask_even & (action == 2), state - 2, next_state)
+        next_state = torch.where(
+            mask_even & (action == down_action), state - 2, next_state
+        )
         # Up action
-        next_state = torch.where(mask_even & (action == 3), state + 2, next_state)
+        next_state = torch.where(
+            mask_even & (action == up_action), state + 2, next_state
+        )
 
         # Left action
         constraint_reward = torch.where(
-            action == 0, 1 * self.left_reward, constraint_reward
+            action == left_action, 1 * self.left_reward, constraint_reward
         )
         # Right action
         constraint_reward = torch.where(
-            action == 1, 1 * self.right_reward, constraint_reward
+            action == right_action, 1 * self.right_reward, constraint_reward
         )
 
         # Down action
         constraint_reward = torch.where(
-            mask_even & (action == 2), 1 * self.down_reward, constraint_reward
+            mask_even & (action == down_action), 1 * self.down_reward, constraint_reward
         )
         # Up action
         constraint_reward = torch.where(
-            mask_even & (action == 3), 1 * self.up_reward, constraint_reward
+            mask_even & (action == up_action), 1 * self.up_reward, constraint_reward
         )
 
         # Ensure that we can never move past the end pos
@@ -156,13 +166,13 @@ class ToyEnv(EnvBase):
         next_state = torch.where(next_state < 0, state, next_state)
 
         done = torch.zeros_like(state, dtype=torch.bool, device=self.device)
-        # constraint_reward = torch.where(
-        #     next_state == state, -self.punishment, constraint_reward
-        # )
 
         # Big reward for reaching the end pos, overriding the possible constraints
-        sparse_reward = torch.where(
-            next_state == self.n_states - 1, self.big_reward, reward
+        normal_reward = torch.where(
+            next_state == self.n_states - 1, self.big_reward, normal_reward
+        )
+        constraint_reward = torch.where(
+            next_state == self.n_states - 1, 0, constraint_reward
         )
         # If we reach final pos, we're done
         done = torch.where(next_state == self.n_states - 1, 1.0, done).to(torch.bool)
@@ -176,7 +186,12 @@ class ToyEnv(EnvBase):
         out = TensorDict(
             {
                 "state": next_state,
-                "reward": sparse_reward,
+                "reward": (
+                    (normal_reward + constraint_reward)
+                    if self.constraints_active
+                    else normal_reward
+                ),
+                "normal_reward": normal_reward.unsqueeze(-1),
                 "constraint_reward": constraint_reward.unsqueeze(-1),
                 "done": done,
             },
@@ -231,21 +246,10 @@ def get_toy_env(env_config, gamma):
         n_states=env_config["n_states"],
         big_reward=env_config["big_reward"],
         random_start=False,
-        # punishment=env_config["punishment"],
+        constraints_active=env_config["constraints_active"],
         seed=None,
         device=env_config["device"],
     ).to(env_config["device"])
-
-    # Rename reward to normal_reward
-    env = TransformedEnv(
-        env,
-        Compose(
-            StepCounter(),
-            RenameTransform(
-                in_keys=["reward"], out_keys=["normal_reward"], create_copy=True
-            ),
-        ),
-    )
 
     check_env_specs(env)
     return env

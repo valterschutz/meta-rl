@@ -299,7 +299,12 @@ class DDPGToyAgent:
             nn.Linear(self.n_states, self.n_actions),
             # nn.Tanh(),
         ).to(self.device)
-        self.policy_module = Actor(actor_net, in_keys=["state"], out_keys=["action"])
+        self.policy_module = Actor(
+            spec=self.action_spec,
+            module=actor_net,
+            in_keys=["state"],
+            out_keys=["action"],
+        )
 
         # Critic
         class QValueNet(nn.Module):
@@ -413,6 +418,7 @@ class SACToyAgent:
         lr,
         gamma,
         target_eps,
+        target_entropy,
         mode="train",
     ):
         super().__init__()
@@ -429,10 +435,12 @@ class SACToyAgent:
         self.lr = lr
         self.gamma = gamma
         self.target_eps = target_eps
+        self.target_entropy = target_entropy
 
         self.replay_buffer = TensorDictReplayBuffer(
             batch_size=sub_batch_size,
             storage=LazyTensorStorage(max_size=buffer_size, device=self.device),
+            sampler=SamplerWithoutReplacement(),
         )
 
         self.reset(
@@ -448,8 +456,11 @@ class SACToyAgent:
     ):
         # Policy
         actor_net = nn.Sequential(
-            nn.Linear(self.n_states, self.n_actions),
-            nn.Tanh(),
+            nn.Linear(self.n_states, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, self.n_actions),
         ).to(self.device)
         policy_module = TensorDictModule(
             actor_net, in_keys=["state"], out_keys=["logits"]
@@ -460,6 +471,7 @@ class SACToyAgent:
             in_keys=["logits"],
             # out_keys=["action"],
             distribution_class=OneHotCategorical,
+            default_interaction_type=InteractionType.RANDOM,
         )
 
         # Critic
@@ -467,18 +479,21 @@ class SACToyAgent:
             def __init__(self, n_states, n_actions):
                 super().__init__()
                 self.net = nn.Sequential(
-                    nn.Linear(n_states + n_actions, 1),
+                    nn.Linear(n_states, 128),
+                    nn.ReLU(),
+                    nn.Linear(128, 128),
+                    nn.ReLU(),
+                    nn.Linear(128, n_actions),
                 )
 
-            def forward(self, state, action):
-                x = torch.cat((state, action), dim=-1)
-                return self.net(x)
+            def forward(self, state):
+                return self.net(state)
 
         self.qvalue_net = QValueNet(self.n_states, self.n_actions).to(self.device)
         self.qvalue_module = ValueOperator(
             self.qvalue_net,
-            in_keys=["state", "action"],
-            out_keys=["state_action_value"],
+            in_keys=["state"],
+            out_keys=["action_value"],
         )
 
         if mode == "train":
@@ -495,8 +510,9 @@ class SACToyAgent:
             qvalue_network=self.qvalue_module,
             action_space=self.action_spec,
             num_actions=self.n_actions,
+            fixed_alpha=True if self.target_entropy is not None else False,
         )
-        self.loss_module.make_value_estimator(gamma=self.gamma)
+        self.loss_module.make_value_estimator(ValueEstimators.TD0, gamma=self.gamma)
         self.target_updater = SoftUpdate(self.loss_module, eps=self.target_eps)
 
         self.optim = torch.optim.Adam(self.loss_module.parameters(), lr=self.lr)
@@ -510,6 +526,7 @@ class SACToyAgent:
         losses_actor = []
         losses_qvalue = []
         losses_alpha = []
+        mean_entropy = []
         for i in range(self.num_optim_epochs):
             sub_base_td = self.replay_buffer.sample(self.sub_batch_size)
             if self.use_constraints:
@@ -519,7 +536,6 @@ class SACToyAgent:
                 )
             else:
                 sub_base_td["next", "reward"] = sub_base_td["next", "normal_reward"]
-
             loss_td = self.loss_module(sub_base_td)
             loss = (
                 loss_td["loss_actor"] + loss_td["loss_qvalue"] + loss_td["loss_alpha"]
@@ -527,6 +543,7 @@ class SACToyAgent:
             losses_actor.append(loss_td["loss_actor"].mean().item())
             losses_qvalue.append(loss_td["loss_qvalue"].mean().item())
             losses_alpha.append(loss_td["loss_alpha"].mean().item())
+            mean_entropy.append(loss_td["entropy"].mean().item())
             loss.backward()
             grad_norm = nn.utils.clip_grad_norm_(
                 self.loss_module.parameters(), self.max_grad_norm
@@ -557,8 +574,12 @@ class SACToyAgent:
             },
             batch_size=(),
         )
+        additional_info = {
+            "entropy": sum(mean_entropy) / len(mean_entropy),
+            "max_grad_norm": max_grad_norm,
+        }
 
-        return losses
+        return losses, additional_info
 
 
 class ValueIterationToyAgent:
@@ -646,6 +667,7 @@ def get_toy_agent(agent_type, agent_config, action_spec):
             lr=agent_config["lr"],
             gamma=agent_config["gamma"],
             target_eps=agent_config["target_eps"],
+            target_entropy=agent_config["target_entropy"],
             mode="train",
         )
     elif agent_type == "DDPG":
