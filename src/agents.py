@@ -10,6 +10,7 @@ from tensordict.nn import InteractionType, TensorDictModule
 from torchrl.data import ReplayBuffer, TensorDictReplayBuffer
 from torchrl.data.replay_buffers import (LazyTensorStorage,
                                          SamplerWithoutReplacement)
+from torchrl.data.replay_buffers.samplers import PrioritizedSampler
 from torchrl.modules import TruncatedNormal
 from torchrl.modules.tensordict_module import ProbabilisticActor, ValueOperator
 from torchrl.objectives import ClipPPOLoss
@@ -244,6 +245,8 @@ class OffpolicyTrainer:
         optims,
         loss_keys,
         loss_module,
+        alpha,
+        beta,
         **kwargs,
     ):
         super().__init__()
@@ -263,7 +266,8 @@ class OffpolicyTrainer:
         self.replay_buffer = TensorDictReplayBuffer(
             batch_size=sub_batch_size,
             storage=LazyTensorStorage(max_size=buffer_size, device=self.device),
-            sampler=SamplerWithoutReplacement(),
+            # sampler=SamplerWithoutReplacement(),
+            sampler=PrioritizedSampler(max_capacity=buffer_size, alpha=alpha, beta=beta),
         )
 
         # This will change as training progresses
@@ -305,6 +309,7 @@ class OffpolicyTrainer:
                 optim.zero_grad()
 
             self.target_updater.step()
+            self.replay_buffer.update_tensordict_priority(sub_base_td)
         losses = TensorDict(
             {
                 k: torch.tensor(

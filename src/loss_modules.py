@@ -4,7 +4,8 @@ from tensordict.nn import InteractionType, TensorDictModule
 from torch.distributions import OneHotCategorical
 from torchrl.modules import (NormalParamExtractor, ProbabilisticActor,
                              TruncatedNormal, ValueOperator)
-from torchrl.objectives import DiscreteSACLoss, SACLoss, ValueEstimators
+from torchrl.objectives import DiscreteSACLoss, SACLoss, ValueEstimators, TD3Loss
+from torchrl.modules.tensordict_module import Actor
 
 
 def get_discrete_sac_loss_module(
@@ -45,7 +46,7 @@ def get_discrete_sac_loss_module(
 
 
 def get_continuous_sac_loss_module(
-    n_states, n_actions, action_spec, target_entropy, gamma
+    n_states, n_actions, action_spec, target_entropy, gamma, action_low=None, action_high=None
 ):
     hidden_units = 256
     # Policy
@@ -60,13 +61,17 @@ def get_continuous_sac_loss_module(
     policy_module = TensorDictModule(
         actor_net, in_keys=["state"], out_keys=["loc", "scale"]
     )
+    if action_low is None:
+        action_low = action_spec.low.item()
+    if action_high is None:
+        action_high = action_spec.high.item()
     policy_module = ProbabilisticActor(
         policy_module,
         spec=action_spec,
         in_keys=["loc", "scale"],
         out_keys=["action"],
         distribution_class=TruncatedNormal,
-        distribution_kwargs={"low": action_spec.low.item(), "high": action_spec.high.item()},
+        distribution_kwargs={"low": action_low, "high": action_high},
         default_interaction_type=InteractionType.RANDOM,
     )
 
@@ -95,6 +100,51 @@ def get_continuous_sac_loss_module(
         qvalue_network=qvalue_module,
         fixed_alpha=use_target_entropy,
         target_entropy=(target_entropy if use_target_entropy else "auto"),
+    )
+    loss_module.make_value_estimator(ValueEstimators.TD0, gamma=gamma)
+    return loss_module
+
+def get_continuous_td3_loss_module(
+    n_states, n_actions, action_spec, gamma
+):
+    hidden_units = 256
+    # Policy
+    actor_net = nn.Sequential(
+        nn.Linear(n_states, hidden_units),
+        nn.Tanh(),
+        nn.Linear(hidden_units, hidden_units),
+        nn.Tanh(),
+        nn.Linear(hidden_units, n_actions),
+        nn.Tanh(),
+    )
+    policy_module = Actor(
+        actor_net, in_keys=["state"], out_keys=["action"], spec=action_spec
+    )
+
+    class QValueNet(nn.Module):
+        def __init__(self, n_states, n_actions):
+            super().__init__()
+            self.net = nn.Sequential(
+                nn.Linear(n_states + n_actions, hidden_units),
+                nn.ReLU(),
+                nn.Linear(hidden_units, hidden_units),
+                nn.ReLU(),
+                nn.Linear(hidden_units, 1),
+            )
+
+        def forward(self, state, action):
+            return self.net(torch.cat([state, action], dim=-1))
+    qvalue_net = QValueNet(n_states=n_states, n_actions=n_actions)
+    qvalue_module = ValueOperator(
+        qvalue_net,
+        in_keys=["state", "action"],
+        out_keys=["state_action_value"],
+    )
+    # use_target_entropy = isinstance(target_entropy, (int, float))
+    loss_module = TD3Loss(
+        actor_network=policy_module,
+        qvalue_network=qvalue_module,
+        action_spec=action_spec,
     )
     loss_module.make_value_estimator(ValueEstimators.TD0, gamma=gamma)
     return loss_module

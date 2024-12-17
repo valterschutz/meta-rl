@@ -6,6 +6,7 @@ from pathlib import Path
 
 import torch
 import yaml
+from tensordict.nn.probabilistic import InteractionType
 from torchrl.collectors import SyncDataCollector
 from torchrl.envs import DMControlEnv
 from torchrl.envs.transforms import (CatTensors, Compose, DoubleToFloat,
@@ -18,15 +19,13 @@ from tqdm import tqdm
 
 import wandb
 
-from tensordict.nn.probabilistic import InteractionType
-
 sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from src.agents import OffpolicyTrainer
+from src.envs.dm_env import get_cartpole_env, get_pendulum_env, get_reacher_env
 from src.envs.toy_env import get_toy_env
-from src.envs.cartpole_env import get_cartpole_env
-from src.envs.pendulum_env import get_pendulum_env
 from src.loss_modules import (get_continuous_sac_loss_module,
+                              get_continuous_td3_loss_module,
                               get_discrete_sac_loss_module)
 
 
@@ -40,6 +39,10 @@ def train(env, trainer, collector, env_type:str, agent_type:str, pixel_env=None)
         for i, td in enumerate(collector):
             losses, additional_info = trainer.process_batch(td)
 
+            # We want to plot the action distribution in the environment
+            # If the actions are one_hot encoded, we can plot the argmax of the action
+            action_distribution = wandb.Histogram(td["action"].argmax(dim=-1).cpu()) if env_type == "toy" else wandb.Histogram(td["action"].cpu())
+
             loss_dict = {k: v.item() for k, v in losses.items()}
             wandb.log(
                 {
@@ -47,7 +50,8 @@ def train(env, trainer, collector, env_type:str, agent_type:str, pixel_env=None)
                     **additional_info,
                     "batch number": i,
                     "qvalue_network_ss": sum((p**2).mean().item() for p in trainer.loss_module.qvalue_network_params.parameters()),
-                    "policy_network_ss": sum((p**2).mean().item() for p in trainer.loss_module.actor_network_params.parameters())
+                    "policy_network_ss": sum((p**2).mean().item() for p in trainer.loss_module.actor_network_params.parameters()),
+                    "action distribution": action_distribution,
                 }
             )
             pbar.update(td.numel())
@@ -84,6 +88,8 @@ def get_env(env_type, env_config, gamma):
         env, pixel_env = get_cartpole_env(env_config)
     elif env_type == "pendulum":
         env, pixel_env = get_pendulum_env(env_config)
+    elif env_type == "reacher":
+        env, pixel_env = get_reacher_env(env_config)
     else:
         raise NotImplementedError(f"Environment type {env_type} not implemented.")
 
@@ -115,12 +121,43 @@ def get_trainer_and_policy(agent_type, agent_config, env_type, env):
                 target_entropy=agent_config["target_entropy"],
                 gamma=agent_config["gamma"],
             )
+        elif env_type == "reacher":
+            loss_module = get_continuous_sac_loss_module(
+                n_states=4,
+                n_actions=2,
+                action_spec=env.action_spec,
+                target_entropy=agent_config["target_entropy"],
+                gamma=agent_config["gamma"],
+                action_low=-1,
+                action_high=1,
+            )
         else:
-            raise NotImplementedError(f"Environment type {type(env)} not implemented.")
+            raise NotImplementedError(f"SAC not implemented for environment {type(env)}")
+        loss_keys = ["loss_actor", "loss_qvalue", "loss_alpha"]
         loss_module = loss_module.to(agent_config["device"])
         target_updater = SoftUpdate(loss_module, eps=agent_config["target_eps"])
         optims = [torch.optim.Adam(loss_module.parameters(), lr=agent_config["lr"])]
-        loss_keys = ["loss_actor", "loss_qvalue", "loss_alpha"]
+    elif agent_type == "TD3":
+        if env_type == "pendulum":
+            loss_module = get_continuous_td3_loss_module(
+                n_states=3,
+                n_actions=1,
+                action_spec=env.action_spec,
+                gamma=agent_config["gamma"],
+            )
+        elif env_type == "cartpole":
+            loss_module = get_continuous_td3_loss_module(
+                n_states=5,
+                n_actions=1,
+                action_spec=env.action_spec,
+                gamma=agent_config["gamma"],
+            )
+        else:
+            raise NotImplementedError(f"TD3 not implemented for environment {type(env)}")
+        loss_keys = ["loss_actor", "loss_qvalue"]
+        loss_module = loss_module.to(agent_config["device"])
+        target_updater = SoftUpdate(loss_module, eps=agent_config["target_eps"])
+        optims = [torch.optim.Adam(loss_module.parameters(), lr=agent_config["lr"])]
     else:
         raise NotImplementedError(f"Agent type {agent_type} not implemented.")
 
@@ -139,7 +176,7 @@ def main():
         "agent_type", choices=["SAC", "DDPG", "TD3"], help="Type of agent to train"
     )
     parser.add_argument(
-        "env_type", choices=["toy", "cartpole", "pendulum"], help="Type of environment to train in"
+        "env_type", choices=["toy", "cartpole", "pendulum", "reacher"], help="Type of environment to train in"
     )
     args = parser.parse_args()
     with open(f"configs/envs/{args.env_type}_env.yaml".lower(), encoding="UTF-8") as f:

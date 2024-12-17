@@ -1,35 +1,21 @@
-# TODO: not updated for TD3
-
 device: "cuda:0"
-
-# How many frames per batch
-batch_size: 1_000
-# How long to train
-total_frames: 1_000_000
 
 # Loss hyperparameters
 
 # Target network hyperparameters
 gamma: 0.99
 
-sub_batch_size: 100
 buffer_size: 1_000_000 # Same as SAC paper
 min_buffer_size: 10_000
+sub_batch_size: 100
 
 # Optimization hyperparameters
 num_optim_epochs: 10
-lr: !!float 3e-4 # Same as SAC paper
+# lr: !!float 3e-4 # Same as SAC paper
+lr: !!float 3e-3 # Same as SAC paper
 max_grad_norm: 10
 target_eps: !!float 0.995 # Same as SAC paper
 
 # Replay buffer hyperparameters
 alpha: 0.7 # Same as RB paper
 beta: 0.5 # Same as RB paper
-
-
-        # num_optim_epochs,
-        # buffer_size,
-        # sub_batch_size,
-        # device,
-        # max_grad_norm,
-        # min_buffer_size,

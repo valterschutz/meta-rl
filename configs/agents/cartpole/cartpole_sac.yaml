@@ -16,3 +16,7 @@ num_optim_epochs: 10
 lr: !!float 3e-4 # Same as SAC paper
 max_grad_norm: 10
 target_eps: !!float 0.995 # Same as SAC paper
+
+# Replay buffer hyperparameters
+alpha: 0.7 # Same as RB paper
+beta: 0.5 # Same as RB paper
