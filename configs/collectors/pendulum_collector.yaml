@@ -1,4 +1,4 @@
 
 batch_size: 1000
-total_frames: 1_000_000
+total_frames: 10_000_000
 device: "cuda:0"
