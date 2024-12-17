@@ -25,6 +25,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 from src.agents import OffpolicyTrainer
 from src.envs.toy_env import get_toy_env
 from src.envs.cartpole_env import get_cartpole_env
+from src.envs.pendulum_env import get_pendulum_env
 from src.loss_modules import (get_continuous_sac_loss_module,
                               get_discrete_sac_loss_module)
 
@@ -45,6 +46,8 @@ def train(env, trainer, collector, env_type:str, agent_type:str, pixel_env=None)
                     **loss_dict,
                     **additional_info,
                     "batch number": i,
+                    "qvalue_network_ss": sum((p**2).mean().item() for p in trainer.loss_module.qvalue_network_params.parameters()),
+                    "policy_network_ss": sum((p**2).mean().item() for p in trainer.loss_module.actor_network_params.parameters())
                 }
             )
             pbar.update(td.numel())
@@ -79,6 +82,10 @@ def get_env(env_type, env_config, gamma):
         env, pixel_env = get_toy_env(env_config, gamma)
     elif env_type == "cartpole":
         env, pixel_env = get_cartpole_env(env_config)
+    elif env_type == "pendulum":
+        env, pixel_env = get_pendulum_env(env_config)
+    else:
+        raise NotImplementedError(f"Environment type {env_type} not implemented.")
 
     return env, pixel_env
 
@@ -95,6 +102,14 @@ def get_trainer_and_policy(agent_type, agent_config, env_type, env):
         elif env_type == "cartpole":
             loss_module = get_continuous_sac_loss_module(
                 n_states=5,
+                n_actions=1,
+                action_spec=env.action_spec,
+                target_entropy=agent_config["target_entropy"],
+                gamma=agent_config["gamma"],
+            )
+        elif env_type == "pendulum":
+            loss_module = get_continuous_sac_loss_module(
+                n_states=3,
                 n_actions=1,
                 action_spec=env.action_spec,
                 target_entropy=agent_config["target_entropy"],
@@ -124,7 +139,7 @@ def main():
         "agent_type", choices=["SAC", "DDPG", "TD3"], help="Type of agent to train"
     )
     parser.add_argument(
-        "env_type", choices=["toy", "cartpole"], help="Type of environment to train in"
+        "env_type", choices=["toy", "cartpole", "pendulum"], help="Type of environment to train in"
     )
     args = parser.parse_args()
     with open(f"configs/envs/{args.env_type}_env.yaml".lower(), encoding="UTF-8") as f:
@@ -154,8 +169,8 @@ def main():
     )
 
     wandb.init(
-        project=f"{args.env_type}-base-train",
-        name=f"{args.env_type}-base-train|{datetime.now(timezone.utc).strftime('%Y-%m-%d_%H-%M-%S')}",
+        project=f"{args.env_type}-{args.agent_type}-base-train",
+        name=f"{datetime.now(timezone.utc).strftime('%Y-%m-%d_%H-%M-%S')}",
         config={
             **{f"env_{k}": v for k, v in env_config.items()},
             **{f"agent_{k}": v for k, v in agent_config.items()},
