@@ -1,53 +1,21 @@
+import os
 import sys
-from abc import ABC, abstractmethod
-from pathlib import Path
-from typing import Optional, List
-
-from torchrl.objectives.common import LossModule
-from torchrl.objectives.utils import TargetNetUpdater
+from typing import List
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import yaml
 from tensordict import TensorDict
 from tensordict.nn import InteractionType, TensorDictModule
-from tensordict.nn.distributions import NormalParamExtractor
-from torchrl.data import (
-    Binary,
-    Categorical,
-    ReplayBuffer,
-    TensorDictReplayBuffer,
-    UnboundedContinuous,
-)
-from torchrl.data.replay_buffers import (
-    LazyMemmapStorage,
-    LazyTensorStorage,
-    PrioritizedSampler,
-    SamplerWithoutReplacement,
-)
-from torchrl.modules import OneHotCategorical, TanhNormal, TruncatedNormal
-from torchrl.modules.tensordict_module import (
-    Actor,
-    ProbabilisticActor,
-    SafeModule,
-    ValueOperator,
-)
-from torchrl.objectives import (
-    TD3Loss,
-    A2CLoss,
-    ClipPPOLoss,
-    DDPGLoss,
-    DiscreteSACLoss,
-    SACLoss,
-    SoftUpdate,
-    ValueEstimators,
-)
-from torchrl.objectives.value import GAE, TD0Estimator
-
-import wandb
-
-import os
+from torchrl.data import ReplayBuffer, TensorDictReplayBuffer
+from torchrl.data.replay_buffers import (LazyTensorStorage,
+                                         SamplerWithoutReplacement)
+from torchrl.modules import TruncatedNormal
+from torchrl.modules.tensordict_module import ProbabilisticActor, ValueOperator
+from torchrl.objectives import ClipPPOLoss
+from torchrl.objectives.common import LossModule
+from torchrl.objectives.utils import TargetNetUpdater
+from torchrl.objectives.value import TD0Estimator
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -240,7 +208,11 @@ class PPOMetaAgent:
         return losses, avg_policy_grad_norm, avg_value_grad_norm
 
 
-class OffpolicyAgent:
+class OffpolicyTrainer:
+    """
+    A class that trains an off-policy agent using a replay buffer.
+    """
+
     optims: List[
         torch.optim.Optimizer
     ]  # List of optimizers to call `zero_grad` and `step` on during training
@@ -346,13 +318,16 @@ class OffpolicyAgent:
         )
         additional_info = {
             "mean_grad_norm": sum(mean_grad_norm) / len(mean_grad_norm),
-            "mean normal reward": np.mean(td["next", "normal_reward"].cpu().numpy()),
-            "mean constraint reward": np.mean(
-                td["next", "constraint_reward"].cpu().numpy()
-            ),
+            "mean normal reward": td["next", "normal_reward"].mean().cpu(),
+            "mean constraint reward": td["next", "constraint_reward"].mean().cpu(),
         }
 
         return losses, additional_info
+
+    def save(self, path):
+        # Save loss module
+        torch.save(self.loss_module.state_dict(), path / "loss_module.pth")
+        # torch.save(self.target_updater.state_dict(), path / "target_updater.pth")
 
 
 class ValueIterationToyAgent:

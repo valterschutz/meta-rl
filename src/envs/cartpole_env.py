@@ -1,59 +1,42 @@
-from torchrl.envs import DMControlEnv
-from torchrl.envs.transforms import (
-    CatTensors,
-    Compose,
-    DoubleToFloat,
-    RenameTransform,
-    StepCounter,
-    TransformedEnv,
-)
 import torch
+from torchrl.envs import DMControlEnv
+from torchrl.envs.transforms import (CatTensors, Compose, DoubleToFloat,
+                                     RenameTransform, StepCounter,
+                                     TransformedEnv)
 
-
-def angle_normalize(x):
-    return ((x + torch.pi) % (2 * torch.pi)) - torch.pi
-
-
-def make_composite_from_td(td):
-    # custom function to convert a ``tensordict`` in a similar spec structure
-    # of unbounded values.
-    composite = Composite(
-        {
-            key: (
-                make_composite_from_td(tensor)
-                if isinstance(tensor, TensorDictBase)
-                else Unbounded(
-                    dtype=tensor.dtype, device=tensor.device, shape=tensor.shape
-                )
-            )
-            for key, tensor in td.items()
-        },
-        shape=td.shape,
-    )
-    return composite
-
-
-def get_cartpole_env(env_config, from_pixels=False):
+def get_cartpole_env(env_config):
     def constraint_transform(td):
         # Constraint reward:
-        td["constraint"] = (td["velocity"] ** 2).sum(-1, keepdim=True)
+        td["constraint_reward"] = (td["velocity"] ** 2).sum(-1, keepdim=True)
+        if "next" in td:
+            td["next","constraint_reward"] = (td["next", "velocity"] ** 2).sum(-1, keepdim=True)
+
         return td
 
-    env = TransformedEnv(
-        DMControlEnv(
-            "cartpole", "swingup", device=env_config["device"], from_pixels=from_pixels
-        ),
-        Compose(
-            DoubleToFloat(),
-            CatTensors(
-                in_keys=["position", "velocity"], out_key="state", del_keys=False
+    def f(from_pixels):
+        return TransformedEnv(
+            DMControlEnv(
+                "cartpole",
+                "swingup",
+                device=env_config["device"],
+                from_pixels=from_pixels,
             ),
-            RenameTransform(
-                in_keys=["reward"], out_keys=["normal_reward"], create_copy=True
+            Compose(
+                DoubleToFloat(),
+                CatTensors(
+                    in_keys=["position", "velocity"], out_key="state", del_keys=False
+                ),
+                RenameTransform(
+                    in_keys=["reward"], out_keys=["normal_reward"], create_copy=True
+                ),
+                RenameTransform(
+                    in_keys=["velocity"], out_keys=["constraint_reward"], create_copy=True
+                ),
+                StepCounter(max_steps=env_config["max_steps"]),
+                # constraint_transform, # TODO: make constraints work
             ),
-            StepCounter(),
-            constraint_transform,
-        ),
-    )
+        )
 
-    return env
+    env = f(from_pixels=False)
+    pixel_env = f(from_pixels=True)
+    return env, pixel_env

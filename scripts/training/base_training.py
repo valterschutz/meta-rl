@@ -1,62 +1,35 @@
+import argparse
 import os
 import sys
 from datetime import datetime, timezone
-
-import torch
-
-sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
-
 from pathlib import Path
 
-import numpy as np
+import torch
 import yaml
 from torchrl.collectors import SyncDataCollector
+from torchrl.envs import DMControlEnv
+from torchrl.envs.transforms import (CatTensors, Compose, DoubleToFloat,
+                                     RenameTransform, StepCounter,
+                                     TransformedEnv)
+from torchrl.envs.utils import check_env_specs, set_exploration_type
+from torchrl.objectives import SoftUpdate
+from torchrl.record import CSVLogger, VideoRecorder
 from tqdm import tqdm
 
 import wandb
-from src.agents import get_toy_agent
-from src.envs.toy_env import get_toy_env, ToyEnv
-from src.loss_modules import (
-    get_discrete_sac_loss_module,
-    get_continuous_sac_loss_module,
-)
 
-import argparse
+from tensordict.nn.probabilistic import InteractionType
 
-import argparse
-import torch
-import torch.nn as nn
-from torch.optim import Adam
-from tensordict.nn import InteractionType, TensorDictModule
-from torchrl.modules import (
-    ProbabilisticActor,
-    ValueOperator,
-    NormalParamExtractor,
-    TruncatedNormal,
-)
-from torchrl.objectives import DiscreteSACLoss, ValueEstimators, SACLoss
-from torch.distributions import OneHotCategorical
-from torchrl.envs import DMControlEnv
-from torchrl.envs.utils import check_env_specs
-from torchrl.envs.transforms import (
-    CatTensors,
-    Compose,
-    DoubleToFloat,
-    RenameTransform,
-    StepCounter,
-    TransformedEnv,
-)
-from torchrl.data.replay_buffers import ReplayBuffer
-from tensordict import TensorDict
-from torchrl.objectives.utils import SoftUpdate
-from src.agents import OffpolicyAgent
-from src.loss_modules import (
-    get_discrete_sac_loss_module,
-    get_continuous_sac_loss_module,
-)
+sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
+
+from src.agents import OffpolicyTrainer
+from src.envs.toy_env import get_toy_env
+from src.envs.cartpole_env import get_cartpole_env
+from src.loss_modules import (get_continuous_sac_loss_module,
+                              get_discrete_sac_loss_module)
 
 
-def train(env, agent, collector):
+def train(env, trainer, collector, env_type:str, agent_type:str, pixel_env=None):
     """
     Train the agent on the given environment using the given collector
     """
@@ -64,7 +37,7 @@ def train(env, agent, collector):
 
     try:
         for i, td in enumerate(collector):
-            losses, additional_info = agent.process_batch(td)
+            losses, additional_info = trainer.process_batch(td)
 
             loss_dict = {k: v.item() for k, v in losses.items()}
             wandb.log(
@@ -77,73 +50,40 @@ def train(env, agent, collector):
             pbar.update(td.numel())
     except KeyboardInterrupt:
         print("Training interrupted by user.")
+    # Log a video of final performance if pixel_env is provided
+    if pixel_env is not None:
+        print("Recording video...")
+        dt = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+        exp_name = f"{env_type}|{agent_type}_{dt}"
+        logger = CSVLogger(exp_name=exp_name, log_dir="logs", video_format="pt")
+        recorder = VideoRecorder(logger, tag="temp")
+        record_env = TransformedEnv(pixel_env, recorder)
+        with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
+            rollout = record_env.rollout(max_steps=sys.maxsize, policy=trainer.loss_module.actor_network)
+        recorder.dump() # Saves video as a .pt file at `csv`
+        # Now load the file as a tensor
+        video = torch.load(Path(logger.log_dir) / exp_name / "videos" / "temp_0.pt").numpy()
+        wandb.log({"video": wandb.Video(video)})
     pbar.close()
 
     # Save model weights
     print("Saving agent...")
-    agent.save("models/{env_type}/{agent_type}/")
-    # p = Path(f"models/toy/{agent.__class__.__name__}/")
-    # # Create a directory in `p` with the name of the datetime
-    # p = p / datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
-    # # Create the directory if not already present
-    # p.mkdir(parents=True, exist_ok=True)
-    # policy_path = p / "policy.pth"
-    # torch.save(agent.policy_module, policy_path)
+    save_path = Path(f"models/{env_type}/{agent_type}")
+    # Create necessary directories if not already present
+    save_path.mkdir(parents=True, exist_ok=True)
+    trainer.save(save_path)
 
 
 def get_env(env_type, env_config, gamma):
     if env_type == "toy":
-        x, y = ToyEnv.calculate_xy(
-            env_config["n_states"],
-            env_config["return_x"],
-            env_config["return_y"],
-            env_config["big_reward"],
-            gamma,
-        )
-        env = ToyEnv(
-            left_reward=x,
-            right_reward=x,
-            down_reward=y,
-            up_reward=y,
-            n_states=env_config["n_states"],
-            big_reward=env_config["big_reward"],
-            random_start=False,
-            constraints_active=env_config["constraints_active"],
-            seed=None,
-            device=env_config["device"],
-        ).to(env_config["device"])
-        check_env_specs(env)
+        env, pixel_env = get_toy_env(env_config, gamma)
     elif env_type == "cartpole":
+        env, pixel_env = get_cartpole_env(env_config)
 
-        def constraint_transform(td):
-            # Constraint reward:
-            td["constraint"] = (td["velocity"] ** 2).sum(-1, keepdim=True)
-            return td
-
-        env = TransformedEnv(
-            DMControlEnv(
-                "cartpole",
-                "swingup",
-                device=env_config["device"],
-                # from_pixels=from_pixels,
-            ),
-            Compose(
-                DoubleToFloat(),
-                CatTensors(
-                    in_keys=["position", "velocity"], out_key="state", del_keys=False
-                ),
-                RenameTransform(
-                    in_keys=["reward"], out_keys=["normal_reward"], create_copy=True
-                ),
-                StepCounter(),
-                constraint_transform,
-            ),
-        )
-
-    return env
+    return env, pixel_env
 
 
-def get_agent(agent_type, agent_config, env_type, env):
+def get_trainer_and_policy(agent_type, agent_config, env_type, env):
     if agent_type == "SAC":
         if env_type == "toy":
             loss_module = get_discrete_sac_loss_module(
@@ -162,19 +102,20 @@ def get_agent(agent_type, agent_config, env_type, env):
             )
         else:
             raise NotImplementedError(f"Environment type {type(env)} not implemented.")
+        loss_module = loss_module.to(agent_config["device"])
         target_updater = SoftUpdate(loss_module, eps=agent_config["target_eps"])
         optims = [torch.optim.Adam(loss_module.parameters(), lr=agent_config["lr"])]
         loss_keys = ["loss_actor", "loss_qvalue", "loss_alpha"]
     else:
         raise NotImplementedError(f"Agent type {agent_type} not implemented.")
 
-    return OffpolicyAgent(
-        target_updater=target_updater,
-        optims=optims,
-        loss_keys=loss_keys,
-        loss_module=loss_module,
-        **agent_config,
-    )
+    return OffpolicyTrainer(
+            target_updater=target_updater,
+            optims=optims,
+            loss_keys=loss_keys,
+            loss_module=loss_module,
+            **agent_config,
+        )
 
 
 def main():
@@ -198,12 +139,14 @@ def main():
     ) as f:
         collector_config = yaml.safe_load(f)
 
-    env = get_env(args.env_type, env_config, agent_config["gamma"])
-    agent = get_agent(args.agent_type, agent_config, args.env_type, env)
+    env, pixel_env = get_env(args.env_type, env_config, agent_config["gamma"])
+    trainer = get_trainer_and_policy(
+        args.agent_type, agent_config, args.env_type, env
+    )
 
     collector = SyncDataCollector(
         env,
-        agent.policy,
+        trainer.loss_module.actor_network,
         frames_per_batch=collector_config["batch_size"],
         total_frames=collector_config["total_frames"],
         split_trajs=False,
@@ -211,7 +154,7 @@ def main():
     )
 
     wandb.init(
-        project="{args.env_type}-base-train",
+        project=f"{args.env_type}-base-train",
         name=f"{args.env_type}-base-train|{datetime.now(timezone.utc).strftime('%Y-%m-%d_%H-%M-%S')}",
         config={
             **{f"env_{k}": v for k, v in env_config.items()},
@@ -220,7 +163,7 @@ def main():
         },
     )
 
-    train(env, agent, collector)
+    train(env, trainer, collector, env_type=args.env_type, agent_type=args.agent_type, pixel_env=pixel_env)
 
 
 if __name__ == "__main__":

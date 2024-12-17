@@ -24,18 +24,23 @@
                 "configs/meta_config.yaml"
             ],
             "console": "integratedTerminal",
-            "justMyCode": false
+            "justMyCode": true
         },
         {
-            "name": "Toy debugger",
+            "name": "SAC cartpole debugger",
             "type": "debugpy",
             "request": "launch",
             "program": "${file}",
+            "pythonArgs": [
+                "-Xdev",
+                "-Xfrozen_modules=off"
+            ],
             "args": [
                 "SAC",
+                "cartpole"
             ],
             "console": "integratedTerminal",
-            "justMyCode": false
+            "justMyCode": true
         }
     ]
 }

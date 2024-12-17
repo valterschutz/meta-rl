@@ -1,17 +1,15 @@
 import torch
 import torch.nn as nn
 from tensordict.nn import InteractionType, TensorDictModule
-from torchrl.modules import (
-    ProbabilisticActor,
-    ValueOperator,
-    NormalParamExtractor,
-    TruncatedNormal,
-)
-from torchrl.objectives import DiscreteSACLoss, ValueEstimators, SACLoss
 from torch.distributions import OneHotCategorical
+from torchrl.modules import (NormalParamExtractor, ProbabilisticActor,
+                             TruncatedNormal, ValueOperator)
+from torchrl.objectives import DiscreteSACLoss, SACLoss, ValueEstimators
 
 
-def get_discrete_sac_loss_module(n_states, action_spec, target_entropy, gamma):
+def get_discrete_sac_loss_module(
+    n_states, action_spec, target_entropy, gamma
+):
     n_actions = action_spec.n
     # Policy
     actor_net = nn.Sequential(
@@ -49,9 +47,15 @@ def get_discrete_sac_loss_module(n_states, action_spec, target_entropy, gamma):
 def get_continuous_sac_loss_module(
     n_states, n_actions, action_spec, target_entropy, gamma
 ):
+    hidden_units = 256
     # Policy
     actor_net = nn.Sequential(
-        nn.Linear(n_states, 2 * n_actions), NormalParamExtractor()
+        nn.Linear(n_states, hidden_units),
+        nn.ReLU(),
+        nn.Linear(hidden_units, hidden_units),
+        nn.ReLU(),
+        nn.Linear(hidden_units, n_actions * 2),
+        NormalParamExtractor()
     )
     policy_module = TensorDictModule(
         actor_net, in_keys=["state"], out_keys=["loc", "scale"]
@@ -62,10 +66,24 @@ def get_continuous_sac_loss_module(
         in_keys=["loc", "scale"],
         out_keys=["action"],
         distribution_class=TruncatedNormal,
+        distribution_kwargs={"low": action_spec.low.item(), "high": action_spec.high.item()},
         default_interaction_type=InteractionType.RANDOM,
     )
 
-    qvalue_net = nn.Sequential(nn.Linear(n_states, n_actions))
+    class QValueNet(nn.Module):
+        def __init__(self, n_states, n_actions):
+            super().__init__()
+            self.net = nn.Sequential(
+                nn.Linear(n_states + n_actions, hidden_units),
+                nn.ReLU(),
+                nn.Linear(hidden_units, hidden_units),
+                nn.ReLU(),
+                nn.Linear(hidden_units, 1),
+            )
+
+        def forward(self, state, action):
+            return self.net(torch.cat([state, action], dim=-1))
+    qvalue_net = QValueNet(n_states=n_states, n_actions=n_actions)
     qvalue_module = ValueOperator(
         qvalue_net,
         in_keys=["state", "action"],

@@ -250,6 +250,8 @@ def get_toy_env(env_config, gamma):
         seed=None,
         device=env_config["device"],
     ).to(env_config["device"])
-
     check_env_specs(env)
-    return env
+
+    pixel_env = None
+
+    return env, pixel_env

@@ -2,7 +2,7 @@
 device: "cuda:0"
 
 # Loss hyperparameters
-target_entropy: 0.0
+target_entropy: null
 
 # Target network hyperparameters
 gamma: 0.99
