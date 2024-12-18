@@ -11,9 +11,14 @@ def get_discrete_ppo_loss_module(
     n_states, action_spec, gamma
 ):
     n_actions = action_spec.n
+    hidden_units = 20
     # Policy
     actor_net = nn.Sequential(
         nn.Linear(n_states, n_actions),
+        nn.ReLU(),
+        nn.Linear(hidden_units, hidden_units),
+        nn.ReLU(),
+        nn.Linear(hidden_units, n_actions),
     )
     policy_module = TensorDictModule(actor_net, in_keys=["state"], out_keys=["logits"])
     policy_module = ProbabilisticActor(
@@ -26,7 +31,13 @@ def get_discrete_ppo_loss_module(
         return_log_prob=True,
     )
 
-    value_net = nn.Sequential(nn.Linear(n_states, 1))
+    value_net = nn.Sequential(
+        nn.Linear(n_states, hidden_units),
+        nn.ReLU(),
+        nn.Linear(hidden_units, hidden_units),
+        nn.ReLU(),
+        nn.Linear(hidden_units, 1),
+    )
     value_module = ValueOperator(
         value_net,
         in_keys=["state"],
@@ -43,9 +54,14 @@ def get_discrete_sac_loss_module(
     n_states, action_spec, target_entropy, gamma
 ):
     n_actions = action_spec.n
+    hidden_units = 20
     # Policy
     actor_net = nn.Sequential(
-        nn.Linear(n_states, n_actions),
+        nn.Linear(n_states, hidden_units),
+        nn.ReLU(),
+        nn.Linear(hidden_units, hidden_units),
+        nn.ReLU(),
+        nn.Linear(hidden_units, n_actions),
     )
     policy_module = TensorDictModule(actor_net, in_keys=["state"], out_keys=["logits"])
     policy_module = ProbabilisticActor(
@@ -57,7 +73,13 @@ def get_discrete_sac_loss_module(
         default_interaction_type=InteractionType.RANDOM,
     )
 
-    qvalue_net = nn.Sequential(nn.Linear(n_states, n_actions))
+    qvalue_net = nn.Sequential(
+        nn.Linear(n_states, hidden_units),
+        nn.ReLU(),
+        nn.Linear(hidden_units, hidden_units),
+        nn.ReLU(),
+        nn.Linear(hidden_units, n_actions),
+    )
     qvalue_module = ValueOperator(
         qvalue_net,
         in_keys=["state"],
@@ -69,7 +91,7 @@ def get_discrete_sac_loss_module(
         qvalue_network=qvalue_module,
         action_space=action_spec,
         num_actions=n_actions,
-        fixed_alpha=use_target_entropy,
+        # fixed_alpha=use_target_entropy, # TODO: uncomment
         target_entropy=(target_entropy if use_target_entropy else "auto"),
     )
     loss_module.make_value_estimator(ValueEstimators.TD0, gamma=gamma)

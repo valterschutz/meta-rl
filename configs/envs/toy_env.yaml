@@ -2,9 +2,8 @@ device: "cpu"
 
 # Base environment configuration
 n_states: 20
-return_x: 5.0
+return_x: 2.0
 return_y: 1.0
 big_reward: 10.0
-# punishment: 0.0
-max_steps: 1000
+max_steps: 100
 constraints_active: false # No constraints in the beginning
