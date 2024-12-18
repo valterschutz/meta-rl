@@ -1,15 +1,11 @@
-from torchrl.envs import EnvBase
 import torch
-from torchrl.data import UnboundedContinuous, Composite, OneHot
-from tensordict import TensorDict
-from torchrl.envs.transforms import (
-    TransformedEnv,
-    Compose,
-    StepCounter,
-    RenameTransform,
-)
-from torchrl.envs.utils import check_env_specs
 import torch.nn.functional as F
+from tensordict import TensorDict
+from torchrl.data import Composite, OneHot, UnboundedContinuous
+from torchrl.envs import EnvBase
+from torchrl.envs.transforms import (Compose, RenameTransform, StepCounter,
+                                     TransformedEnv)
+from torchrl.envs.utils import check_env_specs
 
 
 class ToyEnv(EnvBase):
@@ -250,6 +246,14 @@ def get_toy_env(env_config, gamma):
         seed=None,
         device=env_config["device"],
     ).to(env_config["device"])
+
+
+    env = TransformedEnv(
+        env,
+        Compose(
+            StepCounter(max_steps=env_config["max_steps"]),
+        )
+    )
     check_env_specs(env)
 
     pixel_env = None

@@ -6,5 +6,5 @@ return_x: 5.0
 return_y: 1.0
 big_reward: 10.0
 # punishment: 0.0
-rollout_timeout: 200
+max_steps: 1000
 constraints_active: false # No constraints in the beginning

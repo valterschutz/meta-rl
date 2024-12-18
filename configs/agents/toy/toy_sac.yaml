@@ -3,16 +3,19 @@ device: "cpu"
 # Target network hyperparameters
 gamma: 0.99
 
-buffer_size: 100_000
-min_buffer_size: 3200
+buffer_size: 10_000
+min_buffer_size: 200
 sub_batch_size: 32
 
 # Optimization hyperparameters
-num_optim_epochs: 1
-lr: !!float 1e-1
+num_optim_epochs: 10
+lr: !!float 1e-3
 max_grad_norm: 1000
 # target_eps: 0.995
 target_eps: 0.99
 
 # Loss options
 target_entropy: null
+
+alpha: 0.7 # Same as RB paper
+beta: 0.5 # Same as RB paper

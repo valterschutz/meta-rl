@@ -4,9 +4,40 @@ from tensordict.nn import InteractionType, TensorDictModule
 from torch.distributions import OneHotCategorical
 from torchrl.modules import (NormalParamExtractor, ProbabilisticActor,
                              TruncatedNormal, ValueOperator)
-from torchrl.objectives import DiscreteSACLoss, SACLoss, ValueEstimators, TD3Loss
+from torchrl.objectives import DiscreteSACLoss, SACLoss, ValueEstimators, TD3Loss, ClipPPOLoss
 from torchrl.modules.tensordict_module import Actor
 
+def get_discrete_ppo_loss_module(
+    n_states, action_spec, gamma
+):
+    n_actions = action_spec.n
+    # Policy
+    actor_net = nn.Sequential(
+        nn.Linear(n_states, n_actions),
+    )
+    policy_module = TensorDictModule(actor_net, in_keys=["state"], out_keys=["logits"])
+    policy_module = ProbabilisticActor(
+        policy_module,
+        spec=action_spec,
+        in_keys=["logits"],
+        out_keys=["action"],
+        distribution_class=OneHotCategorical,
+        default_interaction_type=InteractionType.RANDOM,
+        return_log_prob=True,
+    )
+
+    value_net = nn.Sequential(nn.Linear(n_states, 1))
+    value_module = ValueOperator(
+        value_net,
+        in_keys=["state"],
+        out_keys=["state_value"],
+    )
+    loss_module = ClipPPOLoss(
+        actor_network=policy_module,
+        critic_network=value_module,
+    )
+    loss_module.make_value_estimator(ValueEstimators.TD0, gamma=gamma)
+    return loss_module
 
 def get_discrete_sac_loss_module(
     n_states, action_spec, target_entropy, gamma

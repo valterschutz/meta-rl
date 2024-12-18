@@ -334,6 +334,121 @@ class OffpolicyTrainer:
         torch.save(self.loss_module.state_dict(), path / "loss_module.pth")
         # torch.save(self.target_updater.state_dict(), path / "target_updater.pth")
 
+class OnpolicyTrainer:
+    """
+    A class that trains an on-policy agent without using a replay buffer.
+    """
+
+    optims: List[
+        torch.optim.Optimizer
+    ]  # List of optimizers to call `zero_grad` and `step` on during training
+    loss_keys: List[
+        str
+    ]  # List of keys that will be read from the loss_td tensordict after evaluating loss
+    loss_module: (
+        LossModule  # Should have `.make_value_estimator` method already called on it
+    )
+    num_optim_epochs: int  # How many times to sample from the replay buffer and optimize the loss for each environment step
+    buffer_size: int
+    min_buffer_size: (
+        int  # Minimum number of samples in the replay buffer before training starts
+    )
+    sub_base_size: int  # Number of samples to draw from the replay buffer for each optimization step
+    max_grad_norm: float
+    device: torch.device  # Where to store the replay buffer
+
+    def __init__(
+        self,
+        num_optim_epochs,
+        buffer_size,
+        sub_batch_size,
+        device,
+        max_grad_norm,
+        optims,
+        loss_keys,
+        loss_module,
+        **kwargs,
+    ):
+        super().__init__()
+
+        self.buffer_size = buffer_size
+        self.num_optim_epochs = num_optim_epochs
+        self.sub_batch_size = sub_batch_size
+        self.device = device
+        self.max_grad_norm = max_grad_norm
+        self.optims = optims
+        self.loss_keys = loss_keys
+        self.loss_module = loss_module
+        self.device = device
+
+        self.replay_buffer = TensorDictReplayBuffer(
+            batch_size=sub_batch_size,
+            storage=LazyTensorStorage(max_size=buffer_size, device=self.device),
+            sampler=SamplerWithoutReplacement(),
+        )
+
+        # This will change as training progresses
+        self.use_constraints = False
+
+    def process_batch(self, td):
+        """
+        Process a single batch of data.
+        Returns losses as specified by `self.loss_keys` and also gradient norm.
+        """
+        loss_metrics = {key: [] for key in self.loss_keys}
+        mean_grad_norm = []
+        if self.use_constraints:
+            td["next", "reward"] = (
+                td["next", "normal_reward"]
+                + td["next", "constraint_reward"]
+            )
+        else:
+            td["next", "reward"] = td["next", "normal_reward"]
+        for _ in range(self.num_optim_epochs):
+            self.replay_buffer.extend(td.clone().detach())
+            n_samples = len(td) // self.sub_batch_size
+            for _ in range(n_samples):
+                sub_base_td = self.replay_buffer.sample(self.sub_batch_size)
+                loss_td = self.loss_module(sub_base_td)
+                loss = sum(v for k, v in loss_td.items() if k in self.loss_keys)
+                # Save loss metrics
+                for k in self.loss_keys:
+                    loss_metrics[k].append(loss_td[k].mean().item())
+                loss.backward()
+
+                grad_norm = nn.utils.clip_grad_norm_(
+                    self.loss_module.parameters(), self.max_grad_norm
+                )
+                mean_grad_norm.append(grad_norm.item())
+
+                for optim in self.optims:
+                    optim.step()
+                    optim.zero_grad()
+
+        losses = TensorDict(
+            {
+                k: torch.tensor(
+                    sum(v) / len(v),
+                    device=self.device,
+                    dtype=torch.float32,
+                )
+                for k, v in loss_metrics.items()
+            },
+            batch_size=(),
+        )
+        additional_info = {
+            "mean_grad_norm": sum(mean_grad_norm) / len(mean_grad_norm),
+            "mean normal reward": td["next", "normal_reward"].mean().cpu(),
+            "mean constraint reward": td["next", "constraint_reward"].mean().cpu(),
+        }
+
+        return losses, additional_info
+
+    def save(self, path):
+        # Save loss module
+        torch.save(self.loss_module.state_dict(), path / "loss_module.pth")
+        # torch.save(self.target_updater.state_dict(), path / "target_updater.pth")
+
 
 class ValueIterationToyAgent:
     def __init__(self, env, gamma):
@@ -390,13 +505,13 @@ class ValueIterationToyAgent:
         return td
 
 
-def slow_policy(td):
+def toy_slow_policy(td):
     # Always go right
     td["action"] = torch.tensor([0, 1, 0, 0], device=td.device)
     return td
 
 
-def fast_policy(td):
+def toy_fast_policy(td):
     # Always go up in even states, otherwise go right
     state_idx = td["state"].argmax(dim=-1)
     if state_idx % 2 == 0:
@@ -406,50 +521,50 @@ def fast_policy(td):
     return td
 
 
-def get_toy_agent(agent_type, agent_config, env):
-    if agent_type == "SAC":
-        return SACToyAgent(
-            n_states=env.n_states,
-            action_spec=env.action_spec,
-            num_optim_epochs=agent_config["num_optim_epochs"],
-            buffer_size=agent_config["buffer_size"],
-            sub_batch_size=agent_config["sub_batch_size"],
-            device=agent_config["device"],
-            max_grad_norm=agent_config["max_grad_norm"],
-            lr=agent_config["lr"],
-            gamma=agent_config["gamma"],
-            target_eps=agent_config["target_eps"],
-            target_entropy=agent_config["target_entropy"],
-            min_buffer_size=agent_config["min_buffer_size"],
-            mode="train",
-        )
-    elif agent_type == "DDPG":
-        return DDPGToyAgent(
-            n_states=env.n_states,
-            action_spec=env.action_spec,
-            num_optim_epochs=agent_config["num_optim_epochs"],
-            buffer_size=agent_config["buffer_size"],
-            sub_batch_size=agent_config["sub_batch_size"],
-            device=agent_config["device"],
-            max_grad_norm=agent_config["max_grad_norm"],
-            policy_lr=agent_config["policy_lr"],
-            qvalue_lr=agent_config["qvalue_lr"],
-            gamma=agent_config["gamma"],
-            target_eps=agent_config["target_eps"],
-            mode="train",
-        )
-    elif agent_type == "TD3":
-        return TD3ToyAgent(
-            n_states=env.n_states,
-            action_spec=env.action_spec,
-            num_optim_epochs=agent_config["num_optim_epochs"],
-            buffer_size=agent_config["buffer_size"],
-            sub_batch_size=agent_config["sub_batch_size"],
-            device=agent_config["device"],
-            max_grad_norm=agent_config["max_grad_norm"],
-            lr=agent_config["lr"],
-            gamma=agent_config["gamma"],
-            target_eps=agent_config["target_eps"],
-            min_buffer_size=agent_config["min_buffer_size"],
-            mode="train",
-        )
+# def get_toy_agent(agent_type, agent_config, env):
+#     if agent_type == "SAC":
+#         return SACToyAgent(
+#             n_states=env.n_states,
+#             action_spec=env.action_spec,
+#             num_optim_epochs=agent_config["num_optim_epochs"],
+#             buffer_size=agent_config["buffer_size"],
+#             sub_batch_size=agent_config["sub_batch_size"],
+#             device=agent_config["device"],
+#             max_grad_norm=agent_config["max_grad_norm"],
+#             lr=agent_config["lr"],
+#             gamma=agent_config["gamma"],
+#             target_eps=agent_config["target_eps"],
+#             target_entropy=agent_config["target_entropy"],
+#             min_buffer_size=agent_config["min_buffer_size"],
+#             mode="train",
+#         )
+#     elif agent_type == "DDPG":
+#         return DDPGToyAgent(
+#             n_states=env.n_states,
+#             action_spec=env.action_spec,
+#             num_optim_epochs=agent_config["num_optim_epochs"],
+#             buffer_size=agent_config["buffer_size"],
+#             sub_batch_size=agent_config["sub_batch_size"],
+#             device=agent_config["device"],
+#             max_grad_norm=agent_config["max_grad_norm"],
+#             policy_lr=agent_config["policy_lr"],
+#             qvalue_lr=agent_config["qvalue_lr"],
+#             gamma=agent_config["gamma"],
+#             target_eps=agent_config["target_eps"],
+#             mode="train",
+#         )
+#     elif agent_type == "TD3":
+#         return TD3ToyAgent(
+#             n_states=env.n_states,
+#             action_spec=env.action_spec,
+#             num_optim_epochs=agent_config["num_optim_epochs"],
+#             buffer_size=agent_config["buffer_size"],
+#             sub_batch_size=agent_config["sub_batch_size"],
+#             device=agent_config["device"],
+#             max_grad_norm=agent_config["max_grad_norm"],
+#             lr=agent_config["lr"],
+#             gamma=agent_config["gamma"],
+#             target_eps=agent_config["target_eps"],
+#             min_buffer_size=agent_config["min_buffer_size"],
+#             mode="train",
+#         )

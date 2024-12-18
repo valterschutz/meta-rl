@@ -1,7 +1,9 @@
 device: "cpu"
 
 # How long to train
-total_frames: 10_00000
+total_frames: 1_000_000
 
 # How many frames per batch
 batch_size: 32
+
+eval_every_nth_batch: 100

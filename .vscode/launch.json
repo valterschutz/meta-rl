@@ -5,16 +5,6 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Cartpole debugger",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${file}",
-            "args": [
-                "configs/cartpole_config.yaml",
-            ],
-            "console": "integratedTerminal"
-        },
-        {
             "name": "Meta debugger",
             "type": "debugpy",
             "request": "launch",
@@ -38,6 +28,22 @@
             "args": [
                 "SAC",
                 "cartpole"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "PPO toy debugger",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "pythonArgs": [
+                "-Xdev",
+                "-Xfrozen_modules=off"
+            ],
+            "args": [
+                "PPO",
+                "toy"
             ],
             "console": "integratedTerminal",
             "justMyCode": true

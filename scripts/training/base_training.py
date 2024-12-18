@@ -21,15 +21,16 @@ import wandb
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
-from src.agents import OffpolicyTrainer
+from src.agents import OffpolicyTrainer, OnpolicyTrainer, toy_fast_policy, toy_slow_policy
 from src.envs.dm_env import get_cartpole_env, get_pendulum_env, get_reacher_env
 from src.envs.toy_env import get_toy_env
 from src.loss_modules import (get_continuous_sac_loss_module,
-                              get_continuous_td3_loss_module,
+                              get_continuous_td3_loss_module, get_discrete_ppo_loss_module,
                               get_discrete_sac_loss_module)
+from src.utils import calc_return
 
 
-def train(env, trainer, collector, env_type:str, agent_type:str, pixel_env=None):
+def train(env, trainer, collector, env_type:str, agent_type:str, eval_every_nth_batch:int, gamma:float, pixel_env=None):
     """
     Train the agent on the given environment using the given collector
     """
@@ -39,21 +40,63 @@ def train(env, trainer, collector, env_type:str, agent_type:str, pixel_env=None)
         for i, td in enumerate(collector):
             losses, additional_info = trainer.process_batch(td)
 
-            # We want to plot the action distribution in the environment
-            # If the actions are one_hot encoded, we can plot the argmax of the action
+            # We want to plot the action and state distribution in the environment
+            # If the actions/states are one_hot encoded, we can plot the argmax of them
             action_distribution = wandb.Histogram(td["action"].argmax(dim=-1).cpu()) if env_type == "toy" else wandb.Histogram(td["action"].cpu())
+            state_distribution = wandb.Histogram(td["state"].argmax(dim=-1).cpu()) if env_type == "toy" else wandb.Histogram(td["state"].cpu())
 
             loss_dict = {k: v.item() for k, v in losses.items()}
+            # Log "norm" of networks
+            norm_dict = {}
+            if "qvalue_network_params" in trainer.loss_module.__dict__:
+                norm_dict["qvalue_network_ss"] = sum((p**2).mean().item() for p in trainer.loss_module.qvalue_network_params.parameters())
+            if "policy_network_params" in trainer.loss_module.__dict__:
+                norm_dict["policy_network_ss"] = sum((p**2).mean().item() for p in trainer.loss_module.actor_network_params.parameters())
+            if "critic_network_params" in trainer.loss_module.__dict__:
+                norm_dict["critic_network_ss"] = sum((p**2).mean().item() for p in trainer.loss_module.critic_network_params.parameters())
             wandb.log(
                 {
                     **loss_dict,
                     **additional_info,
+                    **norm_dict,
                     "batch number": i,
-                    "qvalue_network_ss": sum((p**2).mean().item() for p in trainer.loss_module.qvalue_network_params.parameters()),
-                    "policy_network_ss": sum((p**2).mean().item() for p in trainer.loss_module.actor_network_params.parameters()),
                     "action distribution": action_distribution,
+                    "state distribution": state_distribution,
                 }
             )
+
+            if i % eval_every_nth_batch == 0:
+                with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
+                    rollout = env.rollout(max_steps=sys.maxsize, policy=trainer.loss_module.actor_network)
+                    unconstrained_return = calc_return(rollout["next", "normal_reward"].flatten(), gamma)
+                    constrained_return = calc_return(rollout["next", "normal_reward"].flatten()+rollout["next", "constraint_reward"].flatten(), gamma)
+                    wandb.log(
+                        {
+                            "batch number": i,
+                            "unconstrained return": unconstrained_return,
+                            "constrained return": constrained_return,
+                        }
+                    )
+
+                    # Temporary debugging for toy env:
+                    if env_type == "toy":
+                        slow_rollout = env.rollout(max_steps=sys.maxsize, policy=toy_slow_policy)
+                        slow_unconstrained_return = calc_return(slow_rollout["next", "normal_reward"].flatten(), gamma)
+                        slow_constrained_return = calc_return(slow_rollout["next", "normal_reward"].flatten()+slow_rollout["next", "constraint_reward"].flatten(), gamma)
+                        fast_rollout = env.rollout(max_steps=sys.maxsize, policy=toy_fast_policy)
+                        fast_unconstrained_return = calc_return(fast_rollout["next", "normal_reward"].flatten(), gamma)
+                        fast_constrained_return = calc_return(fast_rollout["next", "normal_reward"].flatten()+fast_rollout["next", "constraint_reward"].flatten(), gamma)
+                        wandb.log(
+                            {
+                                "batch number": i,
+                                "slow unconstrained return": slow_unconstrained_return,
+                                "slow constrained return": slow_constrained_return,
+                                "fast unconstrained return": fast_unconstrained_return,
+                                "fast constrained return": fast_constrained_return,
+                            }
+                        )
+
+
             pbar.update(td.numel())
     except KeyboardInterrupt:
         print("Training interrupted by user.")
@@ -96,7 +139,7 @@ def get_env(env_type, env_config, gamma):
     return env, pixel_env
 
 
-def get_trainer_and_policy(agent_type, agent_config, env_type, env):
+def get_trainer_and_policy(agent_type, agent_config, env_type, env, collector_config):
     if agent_type == "SAC":
         if env_type == "toy":
             loss_module = get_discrete_sac_loss_module(
@@ -137,6 +180,13 @@ def get_trainer_and_policy(agent_type, agent_config, env_type, env):
         loss_module = loss_module.to(agent_config["device"])
         target_updater = SoftUpdate(loss_module, eps=agent_config["target_eps"])
         optims = [torch.optim.Adam(loss_module.parameters(), lr=agent_config["lr"])]
+        return OffpolicyTrainer(
+                target_updater=target_updater,
+                optims=optims,
+                loss_keys=loss_keys,
+                loss_module=loss_module,
+                **agent_config,
+        )
     elif agent_type == "TD3":
         if env_type == "pendulum":
             loss_module = get_continuous_td3_loss_module(
@@ -158,22 +208,41 @@ def get_trainer_and_policy(agent_type, agent_config, env_type, env):
         loss_module = loss_module.to(agent_config["device"])
         target_updater = SoftUpdate(loss_module, eps=agent_config["target_eps"])
         optims = [torch.optim.Adam(loss_module.parameters(), lr=agent_config["lr"])]
+        return OffpolicyTrainer(
+                target_updater=target_updater,
+                optims=optims,
+                loss_keys=loss_keys,
+                loss_module=loss_module,
+                **agent_config,
+        )
+    elif agent_type == "PPO":
+        if env_type == "toy":
+            loss_module = get_discrete_ppo_loss_module(
+                n_states=env.n_states,
+                action_spec=env.action_spec,
+                gamma=agent_config["gamma"],
+            )
+        else:
+            raise NotImplementedError(f"PPO not implemented for environment {type(env)}")
+        loss_keys = ["loss_objective", "loss_critic", "loss_entropy"]
+        loss_module = loss_module.to(agent_config["device"])
+        optims = [torch.optim.Adam(loss_module.parameters(), lr=agent_config["lr"])]
+        return OnpolicyTrainer(
+                buffer_size=collector_config["batch_size"],
+                optims=optims,
+                loss_keys=loss_keys,
+                loss_module=loss_module,
+                **agent_config,
+        )
     else:
         raise NotImplementedError(f"Agent type {agent_type} not implemented.")
 
-    return OffpolicyTrainer(
-            target_updater=target_updater,
-            optims=optims,
-            loss_keys=loss_keys,
-            loss_module=loss_module,
-            **agent_config,
-        )
 
 
 def main():
     parser = argparse.ArgumentParser(description="Train a base agent.")
     parser.add_argument(
-        "agent_type", choices=["SAC", "DDPG", "TD3"], help="Type of agent to train"
+        "agent_type", choices=["SAC", "DDPG", "TD3", "PPO"], help="Type of agent to train"
     )
     parser.add_argument(
         "env_type", choices=["toy", "cartpole", "pendulum", "reacher"], help="Type of environment to train in"
@@ -193,7 +262,7 @@ def main():
 
     env, pixel_env = get_env(args.env_type, env_config, agent_config["gamma"])
     trainer = get_trainer_and_policy(
-        args.agent_type, agent_config, args.env_type, env
+        args.agent_type, agent_config, args.env_type, env, collector_config
     )
 
     collector = SyncDataCollector(
@@ -215,7 +284,7 @@ def main():
         },
     )
 
-    train(env, trainer, collector, env_type=args.env_type, agent_type=args.agent_type, pixel_env=pixel_env)
+    train(env, trainer, collector, env_type=args.env_type, agent_type=args.agent_type, pixel_env=pixel_env, eval_every_nth_batch=collector_config["eval_every_nth_batch"], gamma=agent_config["gamma"])
 
 
 if __name__ == "__main__":
