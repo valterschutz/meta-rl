@@ -5,5 +5,6 @@ n_states: 20
 return_x: 2.0
 return_y: 1.0
 big_reward: 10.0
-max_steps: 100
-constraints_active: false # No constraints in the beginning
+max_steps: 200
+# TODO: should not use env constraints but rather trainer constraints
+constraints_active: true # No constraints in the beginning

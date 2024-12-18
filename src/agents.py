@@ -285,13 +285,15 @@ class OffpolicyTrainer:
         mean_grad_norm = []
         for _ in range(self.num_optim_epochs):
             sub_base_td = self.replay_buffer.sample(self.sub_batch_size)
-            if self.use_constraints:
-                sub_base_td["next", "reward"] = (
-                    sub_base_td["next", "normal_reward"]
-                    + sub_base_td["next", "constraint_reward"]
-                )
-            else:
-                sub_base_td["next", "reward"] = sub_base_td["next", "normal_reward"]
+            # TODO: use constraints
+            # if self.use_constraints:
+            #     sub_base_td["next", "reward"] = (
+            #         sub_base_td["next", "normal_reward"]
+            #         + sub_base_td["next", "constraint_reward"]
+            #     )
+            # else:
+            #     sub_base_td["next", "reward"] = sub_base_td["next", "normal_reward"]
+            # print(f"{sub_base_td["next", "reward"]=}")
             loss_td = self.loss_module(sub_base_td)
             loss = sum(v for k, v in loss_td.items() if k in self.loss_keys)
             # Save loss metrics

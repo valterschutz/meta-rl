@@ -6,20 +6,18 @@ gamma: 0.99
 # buffer_size: 10_000
 # min_buffer_size: 200
 buffer_size: 128
-min_buffer_size: 32
+min_buffer_size: 0
 sub_batch_size: 32
 
 # Optimization hyperparameters
 num_optim_epochs: 10
-lr: !!float 1e-3
+actor_lr: !!float 1e-5
+qvalue_lr: !!float 1e-4
 max_grad_norm: 1
 # target_eps: 0.995
 target_eps: 0.99
 
-# Loss options
-target_entropy: 0.0
-
 # alpha: 0.7 # Same as RB paper
 # beta: 0.5 # Same as RB paper
-alpha: 0.0 # Same as RB paper
-beta: 1.0 # Same as RB paper
+alpha: 0.0
+beta: 1.0

@@ -51,7 +51,7 @@ def get_discrete_ppo_loss_module(
     return loss_module
 
 def get_discrete_sac_loss_module(
-    n_states, action_spec, target_entropy, gamma
+    n_states, action_spec, gamma
 ):
     n_actions = action_spec.n
     hidden_units = 20
@@ -85,21 +85,19 @@ def get_discrete_sac_loss_module(
         in_keys=["state"],
         out_keys=["action_value"],
     )
-    use_target_entropy = isinstance(target_entropy, (int, float))
     loss_module = DiscreteSACLoss(
         actor_network=policy_module,
         qvalue_network=qvalue_module,
         action_space=action_spec,
         num_actions=n_actions,
-        # fixed_alpha=use_target_entropy, # TODO: uncomment
-        target_entropy=(target_entropy if use_target_entropy else "auto"),
+        delay_qvalue=True, # TODO: check this
     )
     loss_module.make_value_estimator(ValueEstimators.TD0, gamma=gamma)
     return loss_module
 
 
 def get_continuous_sac_loss_module(
-    n_states, n_actions, action_spec, target_entropy, gamma, action_low=None, action_high=None
+    n_states, n_actions, action_spec, gamma, action_low=None, action_high=None
 ):
     hidden_units = 256
     # Policy

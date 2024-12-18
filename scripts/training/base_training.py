@@ -36,9 +36,11 @@ def train(env, trainer, collector, env_type:str, agent_type:str, eval_every_nth_
     """
     pbar = tqdm(total=collector.total_frames)
 
+    trainer.use_constraints = True
     try:
         for i, td in enumerate(collector):
             losses, additional_info = trainer.process_batch(td)
+            # collector.update_policy_weights_()
 
             # We want to plot the action and state distribution in the environment
             # If the actions/states are one_hot encoded, we can plot the argmax of them
@@ -48,11 +50,13 @@ def train(env, trainer, collector, env_type:str, agent_type:str, eval_every_nth_
             loss_dict = {k: v.item() for k, v in losses.items()}
             # Log "norm" of networks
             norm_dict = {}
-            if "qvalue_network_params" in trainer.loss_module.__dict__:
+            if "qvalue_network" in trainer.loss_module.__dict__:
                 norm_dict["qvalue_network_ss"] = sum((p**2).mean().item() for p in trainer.loss_module.qvalue_network_params.parameters())
-            if "policy_network_params" in trainer.loss_module.__dict__:
+            if "policy_network" in trainer.loss_module.__dict__:
                 norm_dict["policy_network_ss"] = sum((p**2).mean().item() for p in trainer.loss_module.actor_network_params.parameters())
-            if "critic_network_params" in trainer.loss_module.__dict__:
+            if "actor_network" in trainer.loss_module.__dict__:
+                norm_dict["actor_network_ss"] = sum((p**2).mean().item() for p in trainer.loss_module.actor_network_params.parameters())
+            if "critic_network" in trainer.loss_module.__dict__:
                 norm_dict["critic_network_ss"] = sum((p**2).mean().item() for p in trainer.loss_module.critic_network_params.parameters())
             wandb.log(
                 {
@@ -145,41 +149,52 @@ def get_trainer_and_policy(agent_type, agent_config, env_type, env, collector_co
             loss_module = get_discrete_sac_loss_module(
                 n_states=env.n_states,
                 action_spec=env.action_spec,
-                target_entropy=agent_config["target_entropy"],
                 gamma=agent_config["gamma"],
             )
+            loss_keys = ["loss_actor", "loss_qvalue", "loss_alpha"]
+            loss_module = loss_module.to(agent_config["device"])
+            target_updater = SoftUpdate(loss_module, eps=agent_config["target_eps"])
+            optims = [
+                torch.optim.Adam(loss_module.actor_network_params.parameters(), lr=agent_config["actor_lr"]),
+                torch.optim.Adam(loss_module.qvalue_network_params.parameters(), lr=agent_config["qvalue_lr"]),
+            ]
         elif env_type == "cartpole":
             loss_module = get_continuous_sac_loss_module(
                 n_states=5,
                 n_actions=1,
                 action_spec=env.action_spec,
-                target_entropy=agent_config["target_entropy"],
                 gamma=agent_config["gamma"],
             )
+            loss_keys = ["loss_actor", "loss_qvalue", "loss_alpha"]
+            loss_module = loss_module.to(agent_config["device"])
+            target_updater = SoftUpdate(loss_module, eps=agent_config["target_eps"])
+            optims = [torch.optim.Adam(loss_module.parameters(), lr=agent_config["lr"])]
         elif env_type == "pendulum":
             loss_module = get_continuous_sac_loss_module(
                 n_states=3,
                 n_actions=1,
                 action_spec=env.action_spec,
-                target_entropy=agent_config["target_entropy"],
                 gamma=agent_config["gamma"],
             )
+            loss_keys = ["loss_actor", "loss_qvalue", "loss_alpha"]
+            loss_module = loss_module.to(agent_config["device"])
+            target_updater = SoftUpdate(loss_module, eps=agent_config["target_eps"])
+            optims = [torch.optim.Adam(loss_module.parameters(), lr=agent_config["lr"])]
         elif env_type == "reacher":
             loss_module = get_continuous_sac_loss_module(
                 n_states=4,
                 n_actions=2,
                 action_spec=env.action_spec,
-                target_entropy=agent_config["target_entropy"],
                 gamma=agent_config["gamma"],
                 action_low=-1,
                 action_high=1,
             )
+            loss_keys = ["loss_actor", "loss_qvalue", "loss_alpha"]
+            loss_module = loss_module.to(agent_config["device"])
+            target_updater = SoftUpdate(loss_module, eps=agent_config["target_eps"])
+            optims = [torch.optim.Adam(loss_module.parameters(), lr=agent_config["lr"])]
         else:
             raise NotImplementedError(f"SAC not implemented for environment {type(env)}")
-        loss_keys = ["loss_actor", "loss_qvalue", "loss_alpha"]
-        loss_module = loss_module.to(agent_config["device"])
-        target_updater = SoftUpdate(loss_module, eps=agent_config["target_eps"])
-        optims = [torch.optim.Adam(loss_module.parameters(), lr=agent_config["lr"])]
         return OffpolicyTrainer(
                 target_updater=target_updater,
                 optims=optims,
@@ -195,6 +210,10 @@ def get_trainer_and_policy(agent_type, agent_config, env_type, env, collector_co
                 action_spec=env.action_spec,
                 gamma=agent_config["gamma"],
             )
+            loss_keys = ["loss_actor", "loss_qvalue"]
+            loss_module = loss_module.to(agent_config["device"])
+            target_updater = SoftUpdate(loss_module, eps=agent_config["target_eps"])
+            optims = [torch.optim.Adam(loss_module.parameters(), lr=agent_config["lr"])]
         elif env_type == "cartpole":
             loss_module = get_continuous_td3_loss_module(
                 n_states=5,
@@ -202,12 +221,12 @@ def get_trainer_and_policy(agent_type, agent_config, env_type, env, collector_co
                 action_spec=env.action_spec,
                 gamma=agent_config["gamma"],
             )
+            loss_keys = ["loss_actor", "loss_qvalue"]
+            loss_module = loss_module.to(agent_config["device"])
+            target_updater = SoftUpdate(loss_module, eps=agent_config["target_eps"])
+            optims = [torch.optim.Adam(loss_module.parameters(), lr=agent_config["lr"])]
         else:
             raise NotImplementedError(f"TD3 not implemented for environment {type(env)}")
-        loss_keys = ["loss_actor", "loss_qvalue"]
-        loss_module = loss_module.to(agent_config["device"])
-        target_updater = SoftUpdate(loss_module, eps=agent_config["target_eps"])
-        optims = [torch.optim.Adam(loss_module.parameters(), lr=agent_config["lr"])]
         return OffpolicyTrainer(
                 target_updater=target_updater,
                 optims=optims,
@@ -222,11 +241,11 @@ def get_trainer_and_policy(agent_type, agent_config, env_type, env, collector_co
                 action_spec=env.action_spec,
                 gamma=agent_config["gamma"],
             )
+            loss_keys = ["loss_objective", "loss_critic", "loss_entropy"]
+            loss_module = loss_module.to(agent_config["device"])
+            optims = [torch.optim.Adam(loss_module.parameters(), lr=agent_config["lr"])]
         else:
             raise NotImplementedError(f"PPO not implemented for environment {type(env)}")
-        loss_keys = ["loss_objective", "loss_critic", "loss_entropy"]
-        loss_module = loss_module.to(agent_config["device"])
-        optims = [torch.optim.Adam(loss_module.parameters(), lr=agent_config["lr"])]
         return OnpolicyTrainer(
                 buffer_size=collector_config["batch_size"],
                 optims=optims,
