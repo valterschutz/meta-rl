@@ -14,10 +14,11 @@ from torchrl.collectors import SyncDataCollector
 from torchrl.data.replay_buffers import ReplayBuffer
 from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
 from torchrl.data.replay_buffers.storages import LazyTensorStorage
-from torchrl.envs import (Compose, DoubleToFloat, ObservationNorm, StepCounter,
-                          TransformedEnv)
-from torchrl.envs import set_gym_backend
+from torchrl.envs import (Compose, DMControlEnv, DoubleToFloat,
+                          ObservationNorm, StepCounter, TransformedEnv,
+                          set_gym_backend)
 from torchrl.envs.libs.gym import GymEnv
+from torchrl.envs.transforms import CatTensors
 from torchrl.envs.utils import (ExplorationType, check_env_specs,
                                 set_exploration_type)
 from torchrl.modules import ProbabilisticActor, TanhNormal, ValueOperator
@@ -29,10 +30,9 @@ from tqdm import tqdm
 
 import wandb
 
-is_fork = multiprocessing.get_start_method() == "fork"
 device = (
     torch.device(1)
-    if torch.cuda.is_available() and not is_fork
+    if torch.cuda.is_available()
     else torch.device("cpu")
 )
 num_cells = 256
@@ -49,20 +49,16 @@ gamma = 0.99
 lmbda = 0.95
 entropy_eps = 1e-4
 
-with set_gym_backend("gym"):
-    base_env = GymEnv("Reacher-v4", device=device)
-base_env.auto_register_info_dict()
+base_env = DMControlEnv("reacher", "easy", device=device)
 
 env = TransformedEnv(
     base_env,
     Compose(
-        # ObservationNorm(in_keys=["observation"]),
+        CatTensors(in_keys=["position", "velocity", "to_target"], out_key="state"),
         DoubleToFloat(),
         StepCounter(),
     ),
 )
-
-# env.transform[0].init_stats(num_iter=1000, reduce_dim=0, cat_dim=0)
 
 check_env_specs(env)
 
@@ -80,7 +76,7 @@ actor_net = nn.Sequential(
 )
 
 policy_module = TensorDictModule(
-    actor_net, in_keys=["observation"], out_keys=["loc", "scale"]
+    actor_net, in_keys=["state"], out_keys=["loc", "scale"]
 )
 
 policy_module = ProbabilisticActor(
@@ -108,7 +104,7 @@ value_net = nn.Sequential(
 
 value_module = ValueOperator(
     module=value_net,
-    in_keys=["observation"],
+    in_keys=["state"],
 )
 value_module(env.reset())
 
@@ -140,6 +136,7 @@ loss_module = ClipPPOLoss(
     critic_coef=1.0,
     loss_critic_type="smooth_l1",
 )
+loss_keys = ["loss_objective", "loss_critic", "loss_entropy"]
 
 optim = torch.optim.Adam(loss_module.parameters(), lr)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -158,23 +155,29 @@ try:
             advantage_module(tensordict_data)
             data_view = tensordict_data.reshape(-1)
             replay_buffer.extend(data_view.cpu())
+            losses = {loss_key: [] for loss_key in loss_keys}
+            grads = []
             for _ in range(frames_per_batch // sub_batch_size):
                 subdata = replay_buffer.sample(sub_batch_size)
                 loss_vals = loss_module(subdata.to(device))
-                loss_value = (
-                    loss_vals["loss_objective"]
-                    + loss_vals["loss_critic"]
-                    + loss_vals["loss_entropy"]
-                )
+                loss = 0
+                for loss_key in loss_keys:
+                    loss += loss_vals[loss_key]
+                    losses[loss_key].append(loss_vals[loss_key].item())
 
-                loss_value.backward()
-                torch.nn.utils.clip_grad_norm_(loss_module.parameters(), max_grad_norm)
+                loss.backward()
+                grad = torch.nn.utils.clip_grad_norm_(loss_module.parameters(), max_grad_norm)
+                grads.append(grad)
                 optim.step()
                 optim.zero_grad()
+
+        losses = {loss_key: sum(losses[loss_key]) / len(losses[loss_key]) for loss_key in loss_keys}
 
         wandb.log({
             "reward": tensordict_data["next", "reward"].mean().item(),
             "max step count": tensordict_data["step_count"].max().item(),
+            **losses,
+            "mean gradient norm": sum(grads) / len(grads),
         })
         pbar.update(tensordict_data.numel())
 
@@ -190,13 +193,11 @@ del collector
 del replay_buffer
 
 # Evaluate agent in pixel environment
-with set_gym_backend("gym"):
-    pixel_env = GymEnv("Reacher-v4", device=device, from_pixels=True, pixels_only=False)
-pixel_env.auto_register_info_dict()
+pixel_env = DMControlEnv("reacher", "easy", device=device, from_pixels=True, pixels_only=False)
 pixel_env = TransformedEnv(
     pixel_env,
     Compose(
-        # ObservationNorm(in_keys=["observation"]),
+        CatTensors(in_keys=["position", "velocity", "to_target"], out_key="state"),
         DoubleToFloat(),
         StepCounter(),
     ),
