@@ -30,17 +30,34 @@ from tqdm import tqdm
 
 import wandb
 
+
+def save_video(pixel_env, policy_module, log_dict):
+    exp_name = "temp_exp"
+    logger = CSVLogger(exp_name)
+    recorder = VideoRecorder(logger, tag="my_video")
+    record_env = TransformedEnv(pixel_env, recorder)
+    with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
+        rollout = record_env.rollout(max_steps=1000, policy=policy_module)
+    recorder.dump() # Saves video as a .pt file at `csv`
+    # Now load the file as a tensor
+    video = torch.load(Path(logger.log_dir) / exp_name / "videos" / "my_video_0.pt").numpy()
+    wandb.log({"video": wandb.Video(video), **log_dict})
+
+
 device = (
     torch.device(1)
     if torch.cuda.is_available()
     else torch.device("cpu")
 )
 num_cells = 256
-lr = 3e-4
-max_grad_norm = 1.0
+# lr = 3e-4
+lr = 3e-6
+# max_grad_norm = 1.0
+max_grad_norm = 100.0
 
 frames_per_batch = 1000
 total_frames = 1_000_000
+eval_every_n_batch = 10
 
 sub_batch_size = 64
 num_epochs = 10
@@ -49,18 +66,26 @@ gamma = 0.99
 lmbda = 0.95
 entropy_eps = 1e-4
 
-base_env = DMControlEnv("reacher", "easy", device=device)
-
-env = TransformedEnv(
-    base_env,
-    Compose(
-        CatTensors(in_keys=["position", "velocity", "to_target"], out_key="state"),
-        DoubleToFloat(),
-        StepCounter(),
-    ),
+transforms = Compose(
+    CatTensors(in_keys=["position", "velocity"], out_key="state", del_keys=False),
+    DoubleToFloat(),
+    StepCounter(),
 )
-
+env = DMControlEnv("point_mass", "easy", device=device)
+env = TransformedEnv(
+    env,
+    transforms
+)
 check_env_specs(env)
+
+pixel_env = DMControlEnv("point_mass", "easy", device=device, from_pixels=True, pixels_only=False)
+pixel_env = TransformedEnv(
+    pixel_env,
+    transforms,
+)
+check_env_specs(pixel_env)
+
+
 
 rollout = env.rollout(3)
 
@@ -130,18 +155,18 @@ advantage_module = GAE(
 loss_module = ClipPPOLoss(
     actor_network=policy_module,
     critic_network=value_module,
-    clip_epsilon=clip_epsilon,
-    entropy_bonus=bool(entropy_eps),
-    entropy_coef=entropy_eps,
-    critic_coef=1.0,
-    loss_critic_type="smooth_l1",
+    # clip_epsilon=clip_epsilon,
+    # entropy_bonus=bool(entropy_eps),
+    # entropy_coef=entropy_eps,
+    # critic_coef=1.0,
+    # loss_critic_type="smooth_l1",
 )
 loss_keys = ["loss_objective", "loss_critic", "loss_entropy"]
 
 optim = torch.optim.Adam(loss_module.parameters(), lr)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optim, total_frames // frames_per_batch, 0.0
-)
+# scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+#     optim, total_frames // frames_per_batch, 0.0
+# )
 
 logs = defaultdict(list)
 pbar = tqdm(total=total_frames)
@@ -151,6 +176,8 @@ wandb.init(project="temp")
 
 try:
     for i, tensordict_data in enumerate(collector):
+        # Artificially add reward to the data, proportional to the distance from the origin
+        tensordict_data["next", "reward"] -= 0.1 * tensordict_data["position"].norm()
         for _ in range(num_epochs):
             advantage_module(tensordict_data)
             data_view = tensordict_data.reshape(-1)
@@ -178,12 +205,18 @@ try:
             "max step count": tensordict_data["step_count"].max().item(),
             **losses,
             "mean gradient norm": sum(grads) / len(grads),
+            "batch": i,
         })
-        pbar.update(tensordict_data.numel())
 
-        scheduler.step()
-except KeyboardInterrupt:
-    print("Training interrupted by user.")
+        if i % eval_every_n_batch == 0:
+            save_video(pixel_env, policy_module, {
+                "batch": i
+            })
+
+        pbar.update(tensordict_data.numel())
+        # scheduler.step()
+except Exception as e:
+    print(f"Training interrupted due to an error: {e}")
     pbar.close()
 
 # Remove old environment and value module
@@ -191,24 +224,3 @@ del env
 del value_module
 del collector
 del replay_buffer
-
-# Evaluate agent in pixel environment
-pixel_env = DMControlEnv("reacher", "easy", device=device, from_pixels=True, pixels_only=False)
-pixel_env = TransformedEnv(
-    pixel_env,
-    Compose(
-        CatTensors(in_keys=["position", "velocity", "to_target"], out_key="state"),
-        DoubleToFloat(),
-        StepCounter(),
-    ),
-)
-exp_name = "temp_exp"
-logger = CSVLogger(exp_name)
-recorder = VideoRecorder(logger, tag="my_video")
-record_env = TransformedEnv(pixel_env, recorder)
-with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
-    rollout = record_env.rollout(max_steps=1000, policy=policy_module)
-recorder.dump() # Saves video as a .pt file at `csv`
-# Now load the file as a tensor
-video = torch.load(Path(logger.log_dir) / exp_name / "videos" / "my_video_0.pt").numpy()
-wandb.log({"video": wandb.Video(video)})
