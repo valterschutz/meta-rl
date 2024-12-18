@@ -11,8 +11,8 @@ sub_batch_size: 32
 
 # Optimization hyperparameters
 num_optim_epochs: 10
-actor_lr: !!float 1e-5
-qvalue_lr: !!float 1e-4
+actor_lr: !!float 1e-3
+qvalue_lr: !!float 1e-3
 max_grad_norm: 1
 # target_eps: 0.995
 target_eps: 0.99

@@ -37,7 +37,7 @@ def calc_return(t: Tensor, gamma: float, discount_start=0):
         raise ValueError("Input tensor `t` must be 1-dimensional.")
 
     # Compute discount factors
-    discounts = gamma ** (torch.arange(len(t)) + discount_start)
+    discounts = gamma ** (torch.arange(len(t), device=t.device) + discount_start)
 
     # Calculate the discounted return
     return (t * discounts).sum().item()

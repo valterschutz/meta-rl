@@ -29,6 +29,19 @@ from src.loss_modules import (get_continuous_sac_loss_module,
                               get_discrete_sac_loss_module)
 from src.utils import calc_return
 
+def save_video(env_type, agent_type, trainer, pixel_env, batch_number):
+    dt = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+    exp_name = f"{env_type}|{agent_type}_{dt}"
+    logger = CSVLogger(exp_name=exp_name, log_dir="logs", video_format="pt")
+    recorder = VideoRecorder(logger, tag="temp")
+    record_env = TransformedEnv(pixel_env, recorder)
+    with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
+        rollout = record_env.rollout(max_steps=sys.maxsize, policy=trainer.loss_module.actor_network)
+    recorder.dump() # Saves video as a .pt file at `csv`
+    # Now load the file as a tensor
+    video = torch.load(Path(logger.log_dir) / exp_name / "videos" / "temp_0.pt").numpy()
+    wandb.log({"video": wandb.Video(video), "batch number": batch_number})
+
 
 def train(env, trainer, collector, env_type:str, agent_type:str, eval_every_nth_batch:int, gamma:float, pixel_env=None):
     """
@@ -44,8 +57,15 @@ def train(env, trainer, collector, env_type:str, agent_type:str, eval_every_nth_
 
             # We want to plot the action and state distribution in the environment
             # If the actions/states are one_hot encoded, we can plot the argmax of them
-            action_distribution = wandb.Histogram(td["action"].argmax(dim=-1).cpu()) if env_type == "toy" else wandb.Histogram(td["action"].cpu())
-            state_distribution = wandb.Histogram(td["state"].argmax(dim=-1).cpu()) if env_type == "toy" else wandb.Histogram(td["state"].cpu())
+            # If actions/states are multi-dimensional, we want one histogram per dimension
+            # action_distribution = wandb.Histogram(td["action"].argmax(dim=-1).cpu()) if env_type == "toy" else wandb.Histogram(td["action"].cpu())
+            # state_distribution = wandb.Histogram(td["state"].argmax(dim=-1).cpu()) if env_type == "toy" else wandb.Histogram(td["state"].cpu())
+            state_distributions = {}
+            for j in range(td["state"].shape[1]):
+                state_distributions[f"state_{j} distribution"] = wandb.Histogram(td["state"][:, j].cpu())
+            action_distributions = {}
+            for j in range(td["action"].shape[1]):
+                action_distributions[f"action_{j} distribution"] = wandb.Histogram(td["action"].argmax(dim=-1)) if env_type == "toy"  else wandb.Histogram(td["action"][:, j].cpu())
 
             loss_dict = {k: v.item() for k, v in losses.items()}
             # Log "norm" of networks
@@ -63,9 +83,9 @@ def train(env, trainer, collector, env_type:str, agent_type:str, eval_every_nth_
                     **loss_dict,
                     **additional_info,
                     **norm_dict,
+                    **action_distributions,
+                    **state_distributions,
                     "batch number": i,
-                    "action distribution": action_distribution,
-                    "state distribution": state_distribution,
                 }
             )
 
@@ -81,6 +101,8 @@ def train(env, trainer, collector, env_type:str, agent_type:str, eval_every_nth_
                             "constrained return": constrained_return,
                         }
                     )
+                    if pixel_env is not None:
+                        save_video(env_type, agent_type, trainer, pixel_env, batch_number=i)
 
                     # Temporary debugging for toy env:
                     if env_type == "toy":
@@ -107,17 +129,7 @@ def train(env, trainer, collector, env_type:str, agent_type:str, eval_every_nth_
     # Log a video of final performance if pixel_env is provided
     if pixel_env is not None:
         print("Recording video...")
-        dt = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
-        exp_name = f"{env_type}|{agent_type}_{dt}"
-        logger = CSVLogger(exp_name=exp_name, log_dir="logs", video_format="pt")
-        recorder = VideoRecorder(logger, tag="temp")
-        record_env = TransformedEnv(pixel_env, recorder)
-        with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
-            rollout = record_env.rollout(max_steps=sys.maxsize, policy=trainer.loss_module.actor_network)
-        recorder.dump() # Saves video as a .pt file at `csv`
-        # Now load the file as a tensor
-        video = torch.load(Path(logger.log_dir) / exp_name / "videos" / "temp_0.pt").numpy()
-        wandb.log({"video": wandb.Video(video)})
+        save_video(env_type, agent_type, trainer, pixel_env, batch_number=-1)
     pbar.close()
 
     # Save model weights

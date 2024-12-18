@@ -238,8 +238,7 @@ def get_toy_env(env_config, gamma):
         left_reward=x,
         right_reward=x,
         down_reward=y,
-        # up_reward=y,
-        up_reward=1.0, # TODO: Change this back to y
+        up_reward=y,
         n_states=env_config["n_states"],
         big_reward=env_config["big_reward"],
         random_start=False,

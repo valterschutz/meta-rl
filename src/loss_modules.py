@@ -90,7 +90,7 @@ def get_discrete_sac_loss_module(
         qvalue_network=qvalue_module,
         action_space=action_spec,
         num_actions=n_actions,
-        delay_qvalue=True, # TODO: check this
+        # delay_qvalue=True, # TODO: check this
     )
     loss_module.make_value_estimator(ValueEstimators.TD0, gamma=gamma)
     return loss_module
@@ -145,12 +145,9 @@ def get_continuous_sac_loss_module(
         in_keys=["state", "action"],
         out_keys=["state_action_value"],
     )
-    use_target_entropy = isinstance(target_entropy, (int, float))
     loss_module = SACLoss(
         actor_network=policy_module,
         qvalue_network=qvalue_module,
-        fixed_alpha=use_target_entropy,
-        target_entropy=(target_entropy if use_target_entropy else "auto"),
     )
     loss_module.make_value_estimator(ValueEstimators.TD0, gamma=gamma)
     return loss_module
