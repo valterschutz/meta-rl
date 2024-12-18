@@ -21,13 +21,18 @@ import wandb
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
-from src.agents import OffpolicyTrainer, OnpolicyTrainer, toy_fast_policy, toy_slow_policy
-from src.envs.dm_env import get_cartpole_env, get_pendulum_env, get_reacher_env
+from src.agents import (OffpolicyTrainer, OnpolicyTrainer, toy_fast_policy,
+                        toy_slow_policy)
+from src.envs.dm_env import (get_cartpole_env, get_pendulum_env,
+                             get_point_mass_env, get_reacher_env)
 from src.envs.toy_env import get_toy_env
-from src.loss_modules import (get_continuous_sac_loss_module,
-                              get_continuous_td3_loss_module, get_discrete_ppo_loss_module,
+from src.loss_modules import (get_continuous_ppo_loss_module,
+                              get_continuous_sac_loss_module,
+                              get_continuous_td3_loss_module,
+                              get_discrete_ppo_loss_module,
                               get_discrete_sac_loss_module)
 from src.utils import calc_return
+
 
 def save_video(env_type, agent_type, trainer, pixel_env, batch_number):
     dt = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
@@ -86,6 +91,8 @@ def train(env, trainer, collector, env_type:str, agent_type:str, eval_every_nth_
                     **action_distributions,
                     **state_distributions,
                     "batch number": i,
+                    "mean normal reward": td["next", "normal_reward"].mean().item(),
+                    "mean constraint reward": td["next", "constraint_reward"].mean().item(),
                 }
             )
 
@@ -149,6 +156,8 @@ def get_env(env_type, env_config, gamma):
         env, pixel_env = get_pendulum_env(env_config)
     elif env_type == "reacher":
         env, pixel_env = get_reacher_env(env_config)
+    elif env_type == "point_mass":
+        env, pixel_env = get_point_mass_env(env_config)
     else:
         raise NotImplementedError(f"Environment type {env_type} not implemented.")
 
@@ -193,6 +202,19 @@ def get_trainer_and_policy(agent_type, agent_config, env_type, env, collector_co
             target_updater = SoftUpdate(loss_module, eps=agent_config["target_eps"])
             optims = [torch.optim.Adam(loss_module.parameters(), lr=agent_config["lr"])]
         elif env_type == "reacher":
+            loss_module = get_continuous_sac_loss_module(
+                n_states=4,
+                n_actions=2,
+                action_spec=env.action_spec,
+                gamma=agent_config["gamma"],
+                action_low=-1,
+                action_high=1,
+            )
+            loss_keys = ["loss_actor", "loss_qvalue", "loss_alpha"]
+            loss_module = loss_module.to(agent_config["device"])
+            target_updater = SoftUpdate(loss_module, eps=agent_config["target_eps"])
+            optims = [torch.optim.Adam(loss_module.parameters(), lr=agent_config["lr"])]
+        elif env_type == "point_mass":
             loss_module = get_continuous_sac_loss_module(
                 n_states=4,
                 n_actions=2,
@@ -256,6 +278,18 @@ def get_trainer_and_policy(agent_type, agent_config, env_type, env, collector_co
             loss_keys = ["loss_objective", "loss_critic", "loss_entropy"]
             loss_module = loss_module.to(agent_config["device"])
             optims = [torch.optim.Adam(loss_module.parameters(), lr=agent_config["lr"])]
+        elif env_type == "point_mass":
+            loss_module = get_continuous_ppo_loss_module(
+                n_states=4,
+                n_actions=2,
+                action_spec=env.action_spec,
+                gamma=agent_config["gamma"],
+                action_low=-1,
+                action_high=1,
+            )
+            loss_keys = ["loss_objective", "loss_critic", "loss_entropy"]
+            loss_module = loss_module.to(agent_config["device"])
+            optims = [torch.optim.Adam(loss_module.parameters(), lr=agent_config["lr"])]
         else:
             raise NotImplementedError(f"PPO not implemented for environment {type(env)}")
         return OnpolicyTrainer(
@@ -276,7 +310,7 @@ def main():
         "agent_type", choices=["SAC", "DDPG", "TD3", "PPO"], help="Type of agent to train"
     )
     parser.add_argument(
-        "env_type", choices=["toy", "cartpole", "pendulum", "reacher"], help="Type of environment to train in"
+        "env_type", choices=["toy", "cartpole", "pendulum", "reacher", "point_mass"], help="Type of environment to train in"
     )
     args = parser.parse_args()
     with open(f"configs/envs/{args.env_type}_env.yaml".lower(), encoding="UTF-8") as f:

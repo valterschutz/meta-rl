@@ -1,0 +1,20 @@
+device: "cuda:0"
+
+# Target network hyperparameters
+gamma: 0.99
+target_eps: !!float 0.995 # Same as SAC paper
+
+buffer_size: 1_000_000 # Same as SAC paper
+min_buffer_size: 10_000
+sub_batch_size: 100
+
+# Optimization hyperparameters
+num_optim_epochs: 10
+lr: !!float 3e-4 # Same as SAC paper
+# lr: !!float 1e-3
+max_grad_norm: 10
+
+alpha: 0.7 # Same as RB paper
+beta: 0.5 # Same as RB paper
+# alpha: 0
+# beta: 1
