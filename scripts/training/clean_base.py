@@ -53,22 +53,18 @@ def save_video(pixel_env, policy_module, log_dict):
     wandb.log({"video": wandb.Video(video), **log_dict})
 
 
-device = (
-    torch.device(0)
-    if torch.cuda.is_available()
-    else torch.device("cpu")
-)
-num_cells = 256
-lr = 3e-4
+device = torch.device("cpu")
+num_cells = 20
+lr = 1e-3
 # lr = 3e-6
 # max_grad_norm = 1.0
 max_grad_norm = 100.0
 
-frames_per_batch = 1000
-total_frames = 1_000_000
+frames_per_batch = 100
+total_frames = 10_000
 eval_every_n_batch = 10
 
-sub_batch_size = 64
+sub_batch_size = 20
 num_epochs = 10
 clip_epsilon = 0.2
 gamma = 0.99
@@ -76,8 +72,6 @@ lmbda = 0.95
 entropy_eps = 1e-4
 
 transforms = Compose(
-    # CatTensors(in_keys=["position", "velocity"], out_key="state", del_keys=False),
-    # DoubleToFloat(),
     StepCounter(),
 )
 x, y = ToyEnv.calculate_xy(n_states=20, return_x=5, return_y=1, big_reward=10, gamma=0.99)
@@ -99,12 +93,6 @@ env = TransformedEnv(
 )
 check_env_specs(env)
 
-# pixel_env = DMControlEnv("point_mass", "easy", device=device, from_pixels=True, pixels_only=False)
-# pixel_env = TransformedEnv(
-#     pixel_env,
-#     transforms,
-# )
-# check_env_specs(pixel_env)
 pixel_env = None
 
 
@@ -114,12 +102,7 @@ rollout = env.rollout(3)
 actor_net = nn.Sequential(
     nn.LazyLinear(num_cells, device=device),
     nn.Tanh(),
-    nn.LazyLinear(num_cells, device=device),
-    nn.Tanh(),
-    nn.LazyLinear(num_cells, device=device),
-    nn.Tanh(),
-    nn.LazyLinear(2 * env.action_spec.shape[-1], device=device),
-    NormalParamExtractor(),
+    nn.LazyLinear(env.action_spec.shape[-1], device=device),
 )
 
 policy_module = TensorDictModule(
@@ -136,10 +119,6 @@ policy_module = ProbabilisticActor(
 policy_module(env.reset())
 
 value_net = nn.Sequential(
-    nn.LazyLinear(num_cells, device=device),
-    nn.Tanh(),
-    nn.LazyLinear(num_cells, device=device),
-    nn.Tanh(),
     nn.LazyLinear(num_cells, device=device),
     nn.Tanh(),
     nn.LazyLinear(1, device=device),
@@ -173,18 +152,10 @@ advantage_module = GAE(
 loss_module = ClipPPOLoss(
     actor_network=policy_module,
     critic_network=value_module,
-    # clip_epsilon=clip_epsilon,
-    # entropy_bonus=bool(entropy_eps),
-    # entropy_coef=entropy_eps,
-    # critic_coef=1.0,
-    # loss_critic_type="smooth_l1",
 )
 loss_keys = ["loss_objective", "loss_critic", "loss_entropy"]
 
 optim = torch.optim.Adam(loss_module.parameters(), lr)
-# scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-#     optim, total_frames // frames_per_batch, 0.0
-# )
 
 logs = defaultdict(list)
 pbar = tqdm(total=total_frames)
