@@ -61,13 +61,14 @@ num_cells = 20
 lr = 1e-2
 max_grad_norm = 100.0
 
-frames_per_batch = 100
-total_frames = 20_000
+frames_per_batch = 20
+total_frames = 10_000
 eval_every_n_batch = 100
 
 buffer_size = total_frames
-min_buffer_size = 1000
-sub_batch_size = 20
+min_buffer_size = 100
+# sub_batch_size = 4
+sub_batch_size = 1
 num_epochs = 10
 gamma = 0.99
 target_eps = 0.99
@@ -107,9 +108,12 @@ rollout = env.rollout(3)
 n_actions = env.action_spec.shape[-1]
 
 actor_net = nn.Sequential(
-    nn.Linear(n_states, num_cells, device=device),
-    nn.ReLU(),
-    nn.Linear(num_cells, n_actions, device=device),
+    # nn.Linear(n_states, num_cells, device=device),
+    # nn.ReLU(),
+    # nn.Linear(num_cells, num_cells, device=device),
+    # nn.ReLU(),
+    # nn.Linear(num_cells, n_actions, device=device),
+    nn.Linear(n_states, n_actions, device=device),
     nn.Sigmoid()
 )
 
@@ -126,9 +130,12 @@ policy_module = ProbabilisticActor(
 )
 
 qvalue_net = nn.Sequential(
-    nn.Linear(n_states, num_cells, device=device),
-    nn.ReLU(),
-    nn.Linear(num_cells, n_actions, device=device),
+    # nn.Linear(n_states, num_cells, device=device),
+    # nn.ReLU(),
+    # nn.Linear(num_cells, num_cells, device=device),
+    # nn.ReLU(),
+    # nn.Linear(num_cells, n_actions, device=device),
+    nn.Linear(n_states, n_actions, device=device),
 )
 qvalue_module = ValueOperator(
     module=qvalue_net,
