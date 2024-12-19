@@ -67,10 +67,7 @@ eval_every_n_batch = 10
 
 sub_batch_size = 20
 num_epochs = 10
-# clip_epsilon = 0.2
 gamma = 0.99
-# lmbda = 0.95
-# entropy_eps = 1e-4
 
 transforms = Compose(
     StepCounter(max_steps=100),
@@ -80,7 +77,8 @@ env = ToyEnv(
     left_reward=x,
     right_reward=x,
     down_reward=y,
-    up_reward=y,
+    # up_reward=y,
+    up_reward=1, # TODO: for debugging
     n_states=20,
     big_reward=10.0,
     constraints_active=False,
@@ -95,8 +93,6 @@ env = TransformedEnv(
 check_env_specs(env)
 
 pixel_env = None
-
-
 
 rollout = env.rollout(3)
 
@@ -146,10 +142,6 @@ replay_buffer = ReplayBuffer(
     sampler=SamplerWithoutReplacement(),
 )
 
-# advantage_module = GAE(
-#     gamma=gamma, lmbda=lmbda, value_network=value_module, average_gae=True
-# )
-
 loss_module = ClipPPOLoss(
     actor_network=policy_module,
     critic_network=value_module,
@@ -163,7 +155,7 @@ logs = defaultdict(list)
 pbar = tqdm(total=total_frames)
 eval_str = ""
 
-wandb.init(project="temp")
+wandb.init(project="clean-base-ppo")
 
 try:
     for i, tensordict_data in enumerate(collector):
@@ -197,6 +189,8 @@ try:
             **losses,
             "mean gradient norm": sum(grads) / len(grads),
             "batch": i,
+            "state distribution": wandb.Histogram(tensordict_data["state"].argmax(dim=-1)),
+            "action distribution": wandb.Histogram(tensordict_data["action"].argmax(dim=-1))
         })
 
         if i % eval_every_n_batch == 0:
