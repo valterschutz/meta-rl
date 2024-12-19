@@ -61,17 +61,16 @@ num_cells = 20
 lr = 1e-2
 max_grad_norm = 100.0
 
-frames_per_batch = 1000
-total_frames = 1_000_000
+frames_per_batch = 100
+total_frames = 20_000
 eval_every_n_batch = 100
 
 buffer_size = total_frames
-min_buffer_size = 10_000
-sub_batch_size = 100
+min_buffer_size = 1000
+sub_batch_size = 20
 num_epochs = 10
 gamma = 0.99
 target_eps = 0.99
-lmbda=0.9
 alpha=0.7
 beta=0.5
 
@@ -80,7 +79,7 @@ n_states = 20
 transforms = Compose(
     StepCounter(max_steps=100),
 )
-x, y = ToyEnv.calculate_xy(n_states=n_states, return_x=5, return_y=1, big_reward=10, gamma=0.99)
+x, y = ToyEnv.calculate_xy(n_states=n_states, return_x=5, return_y=1, big_reward=10, gamma=gamma)
 env = ToyEnv(
     left_reward=x,
     right_reward=x,
