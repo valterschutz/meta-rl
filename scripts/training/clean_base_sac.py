@@ -159,7 +159,8 @@ loss_module = DiscreteSACLoss(
     target_entropy=0.0, # TODO: does this work?
 )
 
-loss_module.make_value_estimator(ValueEstimators.TDLambda, gamma=gamma, lmbda=lmbda)
+# loss_module.make_value_estimator(ValueEstimators.TDLambda, gamma=gamma, lmbda=lmbda)
+loss_module.make_value_estimator(ValueEstimators.TD0, gamma=gamma)
 loss_keys = ["loss_actor", "loss_qvalue", "loss_alpha"]
 
 target_net = SoftUpdate(loss_module, eps=target_eps)
