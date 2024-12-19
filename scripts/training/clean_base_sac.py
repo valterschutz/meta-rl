@@ -63,9 +63,8 @@ frames_per_batch = 1000
 total_frames = 1_000_000
 eval_every_n_batch = 100
 
-# buffer_size = total_frames
-buffer_size = frames_per_batch
-min_buffer_size = 0
+buffer_size = total_frames
+min_buffer_size = 10_000
 sub_batch_size = 100
 num_epochs = 10
 gamma = 0.99
