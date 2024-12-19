@@ -103,10 +103,9 @@ rollout = env.rollout(3)
 
 n_actions = env.action_spec.shape[-1]
 
-# TODO: logits or probs?
 actor_net = nn.Sequential(
     nn.Linear(n_states, num_cells, device=device),
-    nn.Tanh(),
+    nn.ReLU(),
     nn.Linear(num_cells, n_actions, device=device),
     nn.Sigmoid()
 )
@@ -122,11 +121,10 @@ policy_module = ProbabilisticActor(
     distribution_class=OneHotCategorical,
     return_log_prob=True,
 )
-# policy_module(env.reset())
 
 qvalue_net = nn.Sequential(
     nn.Linear(n_states, num_cells, device=device),
-    nn.Tanh(),
+    nn.ReLU(),
     nn.Linear(num_cells, n_actions, device=device),
 )
 qvalue_module = ValueOperator(
@@ -134,7 +132,6 @@ qvalue_module = ValueOperator(
     in_keys=["state"],
     out_keys=["action_value"],
 )
-# qvalue_module(env.rand_action(env.reset()))
 
 
 collector = SyncDataCollector(
