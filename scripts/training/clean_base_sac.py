@@ -58,7 +58,7 @@ def save_video(pixel_env, policy_module, log_dict):
 
 device = torch.device("cpu")
 num_cells = 20
-lr = 1e-3
+lr = 1e-2
 max_grad_norm = 100.0
 
 frames_per_batch = 1000
