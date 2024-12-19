@@ -26,9 +26,18 @@ from torchrl.objectives import ClipPPOLoss
 from torchrl.objectives.value import GAE
 from torchrl.record import VideoRecorder
 from torchrl.record.loggers.csv import CSVLogger
+from torchrl.modules import OneHotCategorical
 from tqdm import tqdm
 
 import wandb
+
+import sys
+import os
+
+sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
+
+from src.envs.toy_env import ToyEnv
+from src.utils import calc_return
 
 
 def save_video(pixel_env, policy_module, log_dict):
@@ -67,23 +76,36 @@ lmbda = 0.95
 entropy_eps = 1e-4
 
 transforms = Compose(
-    CatTensors(in_keys=["position", "velocity"], out_key="state", del_keys=False),
-    DoubleToFloat(),
+    # CatTensors(in_keys=["position", "velocity"], out_key="state", del_keys=False),
+    # DoubleToFloat(),
     StepCounter(),
 )
-env = DMControlEnv("point_mass", "easy", device=device)
+x, y = ToyEnv.calculate_xy(n_states=20, return_x=5, return_y=1, big_reward=10, gamma=0.99)
+env = ToyEnv(
+    left_reward=x,
+    right_reward=x,
+    down_reward=y,
+    up_reward=y,
+    n_states=20,
+    big_reward=10.0,
+    constraints_active=True,
+    random_start=False,
+    seed=None,
+    device=device
+)
 env = TransformedEnv(
     env,
     transforms
 )
 check_env_specs(env)
 
-pixel_env = DMControlEnv("point_mass", "easy", device=device, from_pixels=True, pixels_only=False)
-pixel_env = TransformedEnv(
-    pixel_env,
-    transforms,
-)
-check_env_specs(pixel_env)
+# pixel_env = DMControlEnv("point_mass", "easy", device=device, from_pixels=True, pixels_only=False)
+# pixel_env = TransformedEnv(
+#     pixel_env,
+#     transforms,
+# )
+# check_env_specs(pixel_env)
+pixel_env = None
 
 
 
@@ -101,18 +123,14 @@ actor_net = nn.Sequential(
 )
 
 policy_module = TensorDictModule(
-    actor_net, in_keys=["state"], out_keys=["loc", "scale"]
+    actor_net, in_keys=["state"], out_keys=["logits"]
 )
 
 policy_module = ProbabilisticActor(
     module=policy_module,
     spec=env.action_spec,
-    in_keys=["loc", "scale"],
-    distribution_class=TanhNormal,
-    distribution_kwargs={
-        "low": env.action_spec.space.low,
-        "high": env.action_spec.space.high,
-    },
+    in_keys=["logits"],
+    distribution_class=OneHotCategorical,
     return_log_prob=True,
 )
 policy_module(env.reset())
@@ -209,7 +227,11 @@ try:
         })
 
         if i % eval_every_n_batch == 0:
-            save_video(pixel_env, policy_module, {
+            with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
+                eval_data = env.rollout(100, policy_module)
+            eval_return = calc_return(eval_data["next", "reward"].flatten(), gamma)
+            wandb.log({
+                "eval return": eval_return,
                 "batch": i
             })
 
