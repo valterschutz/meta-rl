@@ -29,6 +29,8 @@ from torchrl.record.loggers.csv import CSVLogger
 from torchrl.modules import OneHotCategorical
 from tqdm import tqdm
 from torchrl.objectives import ValueEstimators
+from torchrl.data import TensorDictReplayBuffer
+from torchrl.data.replay_buffers import PrioritizedSampler, ListStorage
 
 import wandb
 
@@ -70,6 +72,8 @@ num_epochs = 10
 gamma = 0.99
 target_eps = 0.99
 lmbda=0.9
+alpha=0.7
+beta=0.5
 
 n_states = 20
 
@@ -143,9 +147,15 @@ collector = SyncDataCollector(
     device=device,
 )
 
-replay_buffer = ReplayBuffer(
-    storage=LazyTensorStorage(max_size=buffer_size),
-    sampler=SamplerWithoutReplacement(),
+# replay_buffer = ReplayBuffer(
+#     storage=LazyTensorStorage(max_size=buffer_size),
+#     sampler=SamplerWithoutReplacement(),
+# )
+replay_buffer = TensorDictReplayBuffer(
+    storage=ListStorage(max_size=buffer_size),
+    sampler=PrioritizedSampler(max_capacity=buffer_size, alpha=alpha, beta=beta),
+    priority_key="td_error", # TODO: check if this key is correct
+    batch_size=frames_per_batch,
 )
 
 # advantage_module = GAE(
@@ -203,6 +213,7 @@ try:
 
             # Update target network
             target_net.step()
+            replay_buffer.update_tensordict_priority(subdata)
 
         losses = {loss_key: sum(losses[loss_key]) / len(losses[loss_key]) for loss_key in loss_keys}
 
