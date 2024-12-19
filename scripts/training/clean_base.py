@@ -28,6 +28,7 @@ from torchrl.record import VideoRecorder
 from torchrl.record.loggers.csv import CSVLogger
 from torchrl.modules import OneHotCategorical
 from tqdm import tqdm
+from torchrl.objectives import ValueEstimators
 
 import wandb
 
@@ -55,24 +56,24 @@ def save_video(pixel_env, policy_module, log_dict):
 
 device = torch.device("cpu")
 num_cells = 20
-lr = 1e-3
+lr = 1e-4
 # lr = 3e-6
 # max_grad_norm = 1.0
 max_grad_norm = 100.0
 
 frames_per_batch = 100
-total_frames = 10_000
+total_frames = 100_000
 eval_every_n_batch = 10
 
 sub_batch_size = 20
 num_epochs = 10
-clip_epsilon = 0.2
+# clip_epsilon = 0.2
 gamma = 0.99
-lmbda = 0.95
-entropy_eps = 1e-4
+# lmbda = 0.95
+# entropy_eps = 1e-4
 
 transforms = Compose(
-    StepCounter(),
+    StepCounter(max_steps=100),
 )
 x, y = ToyEnv.calculate_xy(n_states=20, return_x=5, return_y=1, big_reward=10, gamma=0.99)
 env = ToyEnv(
@@ -82,7 +83,7 @@ env = ToyEnv(
     up_reward=y,
     n_states=20,
     big_reward=10.0,
-    constraints_active=True,
+    constraints_active=False,
     random_start=False,
     seed=None,
     device=device
@@ -145,14 +146,15 @@ replay_buffer = ReplayBuffer(
     sampler=SamplerWithoutReplacement(),
 )
 
-advantage_module = GAE(
-    gamma=gamma, lmbda=lmbda, value_network=value_module, average_gae=True
-)
+# advantage_module = GAE(
+#     gamma=gamma, lmbda=lmbda, value_network=value_module, average_gae=True
+# )
 
 loss_module = ClipPPOLoss(
     actor_network=policy_module,
     critic_network=value_module,
 )
+loss_module.make_value_estimator(ValueEstimators.TD0, gamma=gamma)
 loss_keys = ["loss_objective", "loss_critic", "loss_entropy"]
 
 optim = torch.optim.Adam(loss_module.parameters(), lr)
@@ -168,7 +170,7 @@ try:
         # Artificially add reward to the data, proportional to the distance from the origin
         # tensordict_data["next", "reward"] -= 0.1 * tensordict_data["position"].norm()
         for _ in range(num_epochs):
-            advantage_module(tensordict_data)
+            # advantage_module(tensordict_data)
             data_view = tensordict_data.reshape(-1)
             replay_buffer.extend(data_view.cpu())
             losses = {loss_key: [] for loss_key in loss_keys}
