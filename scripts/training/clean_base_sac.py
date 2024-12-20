@@ -19,6 +19,7 @@ from torchrl.envs import (Compose, DMControlEnv, DoubleToFloat,
                           set_gym_backend)
 from torchrl.envs.libs.gym import GymEnv
 from torchrl.envs.transforms import CatTensors
+from torchrl.envs import ParallelEnv
 from torchrl.envs.utils import (ExplorationType, check_env_specs,
                                 set_exploration_type)
 from torchrl.modules import ProbabilisticActor, TanhNormal, ValueOperator
@@ -121,6 +122,7 @@ class BaseAgent:
             batch_size=self.batch_size,
         )
 
+
     def process_batch(self, td, constraints_active):
         # Add data to the replay buffer
         data_view = td.reshape(-1)
@@ -137,7 +139,7 @@ class BaseAgent:
                 subdata["next", "reward"] = subdata["next", "normal_reward"] + subdata["next", "constraint_reward"]
             else:
                 subdata["next", "reward"] = subdata["next", "normal_reward"]
-            loss_vals = self.loss_module(subdata.to(device))
+            loss_vals = self.loss_module(subdata.to(self.device))
             loss = 0
             for loss_key in self.loss_keys:
                 loss += loss_vals[loss_key]
@@ -160,117 +162,143 @@ class BaseAgent:
 
         return loss_dict, info_dict
 
-
-
-
-
-device = torch.device("cpu")
-total_frames = 50_000
-batch_size = 200
-n_batches = total_frames // batch_size
-batch_to_activate_constraints = n_batches // 2
-eval_every_n_batch = 100
-gamma = 0.99
-
-n_states = 10
-
-transforms = Compose(
-    StepCounter(max_steps=100),
-)
-x, y = ToyEnv.calculate_xy(n_states=n_states, return_x=2, return_y=1, big_reward=10, gamma=gamma)
-env = ToyEnv(
-    left_reward=x,
-    right_reward=x,
-    down_reward=y,
-    up_reward=y,
-    n_states=n_states,
-    big_reward=10.0,
-    constraints_active=False,
-    random_start=False,
-    seed=None,
-    device=device
-)
-env = TransformedEnv(
-    env,
-    transforms
-)
-check_env_specs(env)
-
-agent = BaseAgent(
-    state_spec=env.state_spec,
-    action_spec=env.action_spec,
-    device=device,
-    buffer_size = total_frames,
-    min_buffer_size = 1000,
-    batch_size = batch_size,
-    sub_batch_size = 20,
-    num_epochs = 10,
-    lr = 1e-2,
-    gamma = gamma,
-    target_eps = 0.99,
-    alpha=0.7,
-    beta=0.5,
+def train_base_agent(device, total_frames, min_buffer_size, n_states, percentage_constraints_active, times_to_eval, log):
+    env_max_steps = 100
+    return_x = 2
+    return_y = 1
+    big_reward = 10.0
+    gamma = 0.99
+    batch_size = 200
+    sub_batch_size = 20
+    num_epochs = 10
+    lr = 1e-2
+    target_eps = 0.99
+    alpha = 0.7
+    beta = 0.5
     max_grad_norm = 100.0
-)
 
-rand_collector = SyncDataCollector(
-    env,
-    None,
-    frames_per_batch=agent.batch_size,
-    total_frames=agent.min_buffer_size,
-    split_trajs=False,
-    device=device,
-)
+    n_batches = total_frames // batch_size
+    eval_every_n_batch = n_batches // times_to_eval
 
-collector = SyncDataCollector(
-    env,
-    agent.policy_module,
-    frames_per_batch=agent.batch_size,
-    total_frames=total_frames-agent.min_buffer_size,
-    split_trajs=False,
-    device=device,
-)
+    transforms = Compose(
+        StepCounter(max_steps=env_max_steps),
+    )
+    x, y = ToyEnv.calculate_xy(n_states=n_states, return_x=return_x, return_y=return_y, big_reward=big_reward, gamma=gamma)
+    env = ToyEnv(
+        left_reward=x,
+        right_reward=x,
+        down_reward=y,
+        up_reward=y,
+        n_states=n_states,
+        big_reward=big_reward,
+        constraints_active=False,
+        random_start=False,
+        seed=None,
+        device=device
+    )
+    env = TransformedEnv(
+        env,
+        transforms
+    )
+    check_env_specs(env)
+
+    agent = BaseAgent(
+        state_spec=env.state_spec,
+        action_spec=env.action_spec,
+        device=device,
+        buffer_size = total_frames,
+        min_buffer_size = min_buffer_size,
+        batch_size = batch_size,
+        sub_batch_size = sub_batch_size,
+        num_epochs = num_epochs,
+        lr = lr,
+        gamma = gamma,
+        target_eps = target_eps,
+        alpha=alpha,
+        beta=beta,
+        max_grad_norm = max_grad_norm
+    )
+
+    rand_collector = SyncDataCollector(
+        env,
+        None,
+        frames_per_batch=agent.batch_size,
+        total_frames=agent.min_buffer_size,
+        split_trajs=False,
+        device=device,
+    )
+
+    collector = SyncDataCollector(
+        env,
+        agent.policy_module,
+        frames_per_batch=agent.batch_size,
+        total_frames=total_frames-agent.min_buffer_size,
+        split_trajs=False,
+        device=device,
+    )
+
+    pbar = tqdm(total=total_frames)
+    batch_to_activate_constraints = int(n_batches * percentage_constraints_active)
+    for td in rand_collector:
+        agent.process_batch(td, constraints_active=False)
+        pbar.update(td.numel())
+
+    eval_returns = []
+    try:
+        for i, td in enumerate(collector):
+            td["action"] = td["action"].to(torch.float32) # Due to bug in torchrl, need to manually cast to float
+            collector.update_policy_weights_() # Check if this is necessary
+
+            loss_dict, info_dict = agent.process_batch(td, constraints_active=i >= batch_to_activate_constraints)
+
+            if log:
+                wandb.log({
+                    "reward": td["next", "reward"].mean().item(),
+                    "max step count": td["step_count"].max().item(),
+                    **loss_dict,
+                    **info_dict,
+                    "batch": i,
+                    "state distribution": wandb.Histogram(td["state"].argmax(dim=-1).cpu()),
+                    "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()),
+                    "policy 'norm'": sum((p**2).sum() for p in agent.policy_module.parameters())
+                    "percentage_constraints_active": percentage_constraints_active,
+                })
+            if i % eval_every_n_batch == 0:
+                with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
+                    eval_data = env.rollout(100, agent.policy_module)
+                eval_return = calc_return(eval_data["next", "reward"].flatten(), gamma)
+                if log:
+                    wandb.log({
+                        "eval return": eval_return,
+                        "batch": i
+                    })
+                eval_returns.append(eval_return)
+
+            pbar.update(td.numel())
+    except Exception as e:
+        print(f"Training interrupted due to an error: {e}")
+        pbar.close()
+    return eval_returns
 
 
-logs = defaultdict(list)
-pbar = tqdm(total=total_frames)
-eval_str = ""
+
 
 wandb.init(project="clean-base-sac")
-
-print("Collecting random data...")
-for td in rand_collector:
-    agent.process_batch(td, constraints_active=False)
-    pbar.update(td.numel())
-
-print("Collecting data using policy...")
-try:
-    for i, td in enumerate(collector):
-        td["action"] = td["action"].to(torch.float32) # Due to bug in torchrl, need to manually cast to float
-        collector.update_policy_weights_() # Check if this is necessary
-
-        loss_dict, info_dict = agent.process_batch(td, constraints_active=i >= batch_to_activate_constraints)
-
-        wandb.log({
-            "reward": td["next", "reward"].mean().item(),
-            "max step count": td["step_count"].max().item(),
-            **loss_dict,
-            **info_dict,
-            "batch": i,
-            "state distribution": wandb.Histogram(td["state"].argmax(dim=-1).cpu()),
-            "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()),
-            "policy 'norm'": sum((p**2).sum() for p in agent.policy_module.parameters())
-        })
-        if i % eval_every_n_batch == 0:
-            with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
-                eval_data = env.rollout(100, agent.policy_module)
-            eval_return = calc_return(eval_data["next", "reward"].flatten(), gamma)
-            wandb.log({
-                "eval return": eval_return,
-                "batch": i
-            })
-
-        pbar.update(td.numel())
-except Exception as e:
-    print(f"Training interrupted due to an error: {e}")
-    pbar.close()
+returns1 = train_base_agent(
+        device=torch.device("cpu"),
+        total_frames=50_000,
+        min_buffer_size=1_000,
+        n_states=20,
+        percentage_constraints_active=0.5,
+        times_to_eval=10,
+        log=True,
+)
+returns2 = train_base_agent(
+        device=torch.device("cpu"),
+        total_frames=50_000,
+        min_buffer_size=1_000,
+        n_states=20,
+        percentage_constraints_active=0.1,
+        times_to_eval=10,
+        log=True,
+)

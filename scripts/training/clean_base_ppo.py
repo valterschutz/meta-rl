@@ -72,16 +72,15 @@ gamma = 0.99
 transforms = Compose(
     StepCounter(max_steps=100),
 )
-x, y = ToyEnv.calculate_xy(n_states=20, return_x=5, return_y=1, big_reward=10, gamma=0.99)
+x, y = ToyEnv.calculate_xy(n_states=20, return_x=2, return_y=1, big_reward=10, gamma=0.99)
 env = ToyEnv(
     left_reward=x,
     right_reward=x,
     down_reward=y,
-    # up_reward=y,
-    up_reward=1, # TODO: for debugging
+    up_reward=y,
     n_states=20,
     big_reward=10.0,
-    constraints_active=False,
+    constraints_active=True,
     random_start=False,
     seed=None,
     device=device
