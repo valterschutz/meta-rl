@@ -1,11 +1,20 @@
+import torch.nn as nn
+import torch
+from torchrl.envs import EnvBase
+from tensordict import TensorDict
+from itertools import peekable
+import torch.nn.functional as F
+from torchrl.envs.transforms import Composite, OneHot, UnboundedContinuous, Bounded
+from torchrl.data import Unbounded
+
 class MetaEnv(EnvBase):
-    def __init__(self, base_env, base_agent, base_collector_fn, device, seed=None):
+    def __init__(self, base_env, base_agent, base_collector_fn, base_loss_keys, device, seed=None):
         super().__init__(device=device, batch_size=[])
         self.base_env = base_env
         self.base_agent = base_agent
 
         self.base_collector_fn = base_collector_fn
-        # self.base_iter = iter(self.base_collector)
+        self.base_loss_keys = base_loss_keys
 
         # Calculate batch size, necessary to know size of observations for meta agent
         i = iter(self.base_collector_fn())
@@ -17,33 +26,66 @@ class MetaEnv(EnvBase):
             seed = torch.empty((), dtype=torch.int64).random_().item()
         self.set_seed(seed)
 
-    def _reset(self, td):
-        self.base_agent.reset(mode="train")
-        # Reset the base collector
-        base_collector = self.base_collector_fn()
+    def _make_spec(self):
+        self.observation_spec = Composite(
+            # The state
+            base_mean_normal_reward=Unbounded(shape=(1,), dtype=torch.float32),
+            base_mean_true_reward=Unbounded(shape=(1,), dtype=torch.float32),
+            last_action=Bounded(low=0, high=1, shape=(1,), dtype=torch.float32),
+            # Base agent that we observe
+            base=Composite(
+                losses=Composite(
+                    **{"loss_key": Unbounded(shape=(), dtype=torch.float32) for loss_key in self.base_loss_keys},
+                    batch_size=(),
+                ),
+                states=OneHot(
+                    self.base_env.n_states,
+                    shape=(self.base_batch_size, self.base_env.n_states),
+                    dtype=torch.float32,
+                ),
+                normal_rewards=Unbounded(shape=(self.base_batch_size, 1), dtype=torch.float32),
+                constraint_rewards=Unbounded(
+                    shape=(self.base_batch_size, 1), dtype=torch.float32
+                ),
+                grad_norm=Unbounded(shape=(), dtype=torch.float32),
+                batch_size=(),
+            ),
+            step=Unbounded(shape=(1,), dtype=torch.float32),
+            shape=(),
+        )
+        self.state_spec = Composite(
+            base_mean_normal_reward=Unbounded(shape=(1,), dtype=torch.float32),
+            base_mean_constraint_reward=Unbounded(shape=(1,), dtype=torch.float32),
+            last_action=Bounded(low=0, high=1, shape=(1,), dtype=torch.float32),
+            step=Unbounded(shape=(1,), dtype=torch.float32),
+        )
+        self.action_spec = Bounded(low=0, high=1, shape=(1,), dtype=torch.float32)
+        self.reward_spec = UnboundedContinuous(shape=(1,), dtype=torch.float32)
 
-        self.base_iter = peekable(base_collector)
+    def _reset(self, td):
+        agent = BaseAgent(self.base_env, self.device, buffer_size, min_buffer_size, batch_size, sub_batch_size, alpha, beta, num_epochs)
+
+        collector = SyncDataCollector(
+            env,
+            agent.policy_module,
+            frames_per_batch=batch_size,
+            total_frames=total_frames,
+            split_trajs=False,
+            device=device,
+        )
 
         return TensorDict(
             {
-                "constant": torch.tensor([42.0], dtype=torch.float32),  # For debugging
-                "base_true_mean_reward": torch.tensor([0.0], dtype=torch.float32),
-                "base_mean_reward": torch.tensor([0.0], dtype=torch.float32),
-                "base_std_reward": torch.tensor([0.0], dtype=torch.float32),
+                "base_mean_normal_reward": torch.tensor([0.0], dtype=torch.float32),
+                "base_mean_constraint_reward": torch.tensor([0.0], dtype=torch.float32),
                 "last_action": torch.tensor([0], dtype=torch.float32),
                 "base": TensorDict(
                     {
                         "losses": TensorDict(
                             {
-                                "loss_objective": torch.tensor(
+                                loss_key: torch.tensor(
                                     0.0, device=self.device, dtype=torch.float32
-                                ),
-                                "loss_critic": torch.tensor(
-                                    0.0, device=self.device, dtype=torch.float32
-                                ),
-                                "loss_entropy": torch.tensor(
-                                    0.0, device=self.device, dtype=torch.float32
-                                ),
+                                ) for loss_key in self.loss_keys
                             },
                             batch_size=(),
                         ),
@@ -52,10 +94,10 @@ class MetaEnv(EnvBase):
                             torch.zeros(self.base_batch_size, dtype=torch.long),
                             num_classes=self.base_env.n_states,
                         ).to(torch.float32),
-                        "rewards": torch.zeros(
+                        "normal_rewards": torch.zeros(
                             (self.base_batch_size, 1), dtype=torch.float32
                         ),
-                        "true_rewards": torch.zeros(
+                        "constraint_rewards": torch.zeros(
                             (self.base_batch_size, 1), dtype=torch.float32
                         ),
                     },
@@ -66,7 +108,7 @@ class MetaEnv(EnvBase):
             batch_size=(),
         )
 
-    def _set_seed(self, seed: Optional[int]):
+    def _set_seed(self, seed):
         rng = torch.manual_seed(seed)
         self.rng = rng
 
@@ -105,63 +147,3 @@ class MetaEnv(EnvBase):
             return True
         except StopIteration:
             return False
-
-    def _make_spec(self):
-        self.observation_spec = Composite(
-            constant=Unbounded(shape=(1,), dtype=torch.float32),
-            # The state
-            base_true_mean_reward=Unbounded(shape=(1,), dtype=torch.float32),
-            base_mean_reward=Unbounded(shape=(1,), dtype=torch.float32),
-            base_std_reward=Unbounded(shape=(1,), dtype=torch.float32),
-            last_action=Bounded(low=0, high=1, shape=(1,), dtype=torch.float32),
-            # Base agent that we observe
-            base=Composite(
-                losses=Composite(
-                    loss_objective=Unbounded(shape=(), dtype=torch.float32),
-                    loss_critic=Unbounded(shape=(), dtype=torch.float32),
-                    loss_entropy=Unbounded(shape=(), dtype=torch.float32),
-                    batch_size=(),
-                ),
-                states=OneHot(
-                    self.base_env.n_states,
-                    shape=(self.base_batch_size, self.base_env.n_states),
-                    dtype=torch.float32,
-                ),
-                rewards=Unbounded(shape=(self.base_batch_size, 1), dtype=torch.float32),
-                true_rewards=Unbounded(
-                    shape=(self.base_batch_size, 1), dtype=torch.float32
-                ),
-                grad_norm=Unbounded(shape=(), dtype=torch.float32),
-                batch_size=(),
-            ),
-            step=Unbounded(shape=(1,), dtype=torch.float32),
-            shape=(),
-        )
-        self.state_spec = Composite(
-            constant=Unbounded(shape=(1,), dtype=torch.float32),
-            base_true_mean_reward=Unbounded(shape=(1,), dtype=torch.float32),
-            base_mean_reward=Unbounded(shape=(1,), dtype=torch.float32),
-            base_std_reward=Unbounded(shape=(1,), dtype=torch.float32),
-            last_action=Bounded(low=0, high=1, shape=(1,), dtype=torch.float32),
-            step=Unbounded(shape=(1,), dtype=torch.float32),
-        )
-        self.action_spec = Bounded(low=0, high=1, shape=(1,), dtype=torch.float32)
-        self.reward_spec = UnboundedContinuous(shape=(1,), dtype=torch.float32)
-
-    # @staticmethod
-    # def _meta_state_from_base_td(meta_td, base_td):
-    #     # Note the use of .detach() to avoid backpropagating through the base agent
-    #     # TODO: detach or not? requires_grad or not?
-    #     # TODO: use true_reward or reward?
-    #     return TensorDict(
-    #         {
-    #             "base_mean_reward": base_td["next", "reward"].mean(),
-    #             "base_std_reward": base_td["next", "reward"].std(),
-    #             "current_weight": meta_td["step"] + 1,
-    #         }
-    #     )
-
-    # @staticmethod
-    # def _meta_reward_from_base_td(meta_td, base_td):
-    #     # Note the use of .detach() to avoid backpropagating through the base agent
-    #     return base_td["next", "true_reward"].mean()
