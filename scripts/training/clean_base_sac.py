@@ -57,18 +57,18 @@ def save_video(pixel_env, policy_module, log_dict):
 
 
 device = torch.device("cpu")
-num_cells = 20
 lr = 1e-2
 max_grad_norm = 100.0
 
-frames_per_batch = 20
-total_frames = 10_000
+frames_per_batch = 200
+total_frames = 100_000
+n_batches = total_frames // frames_per_batch
+batch_to_activate_constraints = 0
 eval_every_n_batch = 100
 
 buffer_size = total_frames
-min_buffer_size = 100
-# sub_batch_size = 4
-sub_batch_size = 1
+min_buffer_size = 1000
+sub_batch_size = 20
 num_epochs = 10
 gamma = 0.99
 target_eps = 0.99
@@ -108,33 +108,22 @@ rollout = env.rollout(3)
 n_actions = env.action_spec.shape[-1]
 
 actor_net = nn.Sequential(
-    # nn.Linear(n_states, num_cells, device=device),
-    # nn.ReLU(),
-    # nn.Linear(num_cells, num_cells, device=device),
-    # nn.ReLU(),
-    # nn.Linear(num_cells, n_actions, device=device),
     nn.Linear(n_states, n_actions, device=device),
-    nn.Sigmoid()
 )
 
 policy_module = TensorDictModule(
-    actor_net, in_keys=["state"], out_keys=["probs"]
+    actor_net, in_keys=["state"], out_keys=["logits"]
 )
 
 policy_module = ProbabilisticActor(
     module=policy_module,
     spec=env.action_spec,
-    in_keys=["probs"],
+    in_keys=["logits"],
     distribution_class=OneHotCategorical,
     return_log_prob=True,
 )
 
 qvalue_net = nn.Sequential(
-    # nn.Linear(n_states, num_cells, device=device),
-    # nn.ReLU(),
-    # nn.Linear(num_cells, num_cells, device=device),
-    # nn.ReLU(),
-    # nn.Linear(num_cells, n_actions, device=device),
     nn.Linear(n_states, n_actions, device=device),
 )
 qvalue_module = ValueOperator(
@@ -158,9 +147,9 @@ collector = SyncDataCollector(
 #     sampler=SamplerWithoutReplacement(),
 # )
 replay_buffer = TensorDictReplayBuffer(
-    storage=ListStorage(max_size=buffer_size),
+    storage=LazyTensorStorage(max_size=buffer_size, device=device),
     sampler=PrioritizedSampler(max_capacity=buffer_size, alpha=alpha, beta=beta),
-    priority_key="td_error", # TODO: check if this key is correct
+    priority_key="td_error",
     batch_size=frames_per_batch,
 )
 
@@ -192,8 +181,6 @@ wandb.init(project="clean-base-sac")
 try:
     for i, tensordict_data in enumerate(collector):
         collector.update_policy_weights_() # Check if this is necessary
-        # Artificially add reward to the data, proportional to the distance from the origin
-        # tensordict_data["next", "reward"] -= 0.1 * tensordict_data["position"].norm()
 
         # Add data to the replay buffer
         data_view = tensordict_data.reshape(-1)
@@ -205,6 +192,11 @@ try:
             grads = []
 
             subdata = replay_buffer.sample(sub_batch_size)
+            # Interpret rewards differently depending on the batch
+            if i > batch_to_activate_constraints:
+                subdata["next", "reward"] = subdata["next", "normal_reward"] + subdata["next", "constraint_reward"]
+            else:
+                subdata["next", "reward"] = subdata["next", "normal_reward"]
             loss_vals = loss_module(subdata.to(device))
             loss = 0
             for loss_key in loss_keys:
@@ -229,8 +221,8 @@ try:
             **losses,
             "mean gradient norm": sum(grads) / len(grads),
             "batch": i,
-            "state distribution": wandb.Histogram(tensordict_data["state"].argmax(dim=-1)),
-            "action distribution": wandb.Histogram(tensordict_data["action"].argmax(dim=-1)),
+            "state distribution": wandb.Histogram(tensordict_data["state"].argmax(dim=-1).cpu()),
+            "action distribution": wandb.Histogram(tensordict_data["action"].argmax(dim=-1).cpu()),
             "policy 'norm'": sum((p**2).sum() for p in policy_module.parameters())
         })
 
