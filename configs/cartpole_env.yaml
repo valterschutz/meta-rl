@@ -1,4 +1,0 @@
-# How many frames per batch
-batch_size: 64 # Maybe same as DDPG paper?
-# How long to train
-total_frames: 1_000_000

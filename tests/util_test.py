@@ -67,7 +67,3 @@ class TestCalcReturn(unittest.TestCase):
         self.assertAlmostEqual(
             calc_return(rewards, gamma, discount_start), expected_return, places=6
         )
-
-
-if __name__ == "__main__":
-    unittest.main()

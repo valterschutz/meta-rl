@@ -149,122 +149,17 @@ class BaseAgent:
 
         return loss_dict, info_dict
 
-def train_base_agent(device, total_frames, min_buffer_size, n_states, return_x, return_y, percentage_constraints_active, times_to_eval, log, progress_bar):
-    env_max_steps = 100
-    big_reward = 10.0
-    gamma = 0.99
-    batch_size = 200
-    sub_batch_size = 20
-    num_epochs = 100
-    lr = 1e-2
-    target_eps = 0.99
-    alpha = 0.7
-    beta = 0.5
-    max_grad_norm = 100.0
+def slow_policy(td):
+    # Always go right
+    td["action"] = torch.tensor([0, 1, 0, 0], device=td.device)
+    return td
 
-    n_batches = total_frames // batch_size
-    eval_every_n_batch = n_batches // times_to_eval
 
-    transforms = Compose(
-        StepCounter(max_steps=env_max_steps),
-    )
-    x, y = ToyEnv.calculate_xy(n_states=n_states, return_x=return_x, return_y=return_y, big_reward=big_reward, gamma=gamma)
-    env = ToyEnv(
-        left_reward=x,
-        right_reward=x,
-        down_reward=y,
-        up_reward=y,
-        n_states=n_states,
-        big_reward=big_reward,
-        constraints_active=False,
-        random_start=False,
-        seed=None,
-        device=device
-    )
-    env = TransformedEnv(
-        env,
-        transforms
-    )
-    # check_env_specs(env)
-
-    agent = BaseAgent(
-        state_spec=env.state_spec,
-        action_spec=env.action_spec,
-        device=device,
-        buffer_size = total_frames,
-        min_buffer_size = min_buffer_size,
-        batch_size = batch_size,
-        sub_batch_size = sub_batch_size,
-        num_epochs = num_epochs,
-        lr = lr,
-        gamma = gamma,
-        target_eps = target_eps,
-        alpha=alpha,
-        beta=beta,
-        max_grad_norm = max_grad_norm
-    )
-
-    rand_collector = SyncDataCollector(
-        env,
-        None,
-        frames_per_batch=agent.batch_size,
-        total_frames=agent.min_buffer_size,
-        split_trajs=False,
-        device=device,
-    )
-
-    collector = SyncDataCollector(
-        env,
-        agent.policy_module,
-        frames_per_batch=agent.batch_size,
-        total_frames=total_frames-agent.min_buffer_size,
-        split_trajs=False,
-        device=device,
-    )
-
-    if progress_bar:
-        pbar = tqdm(total=total_frames)
-    batch_to_activate_constraints = int(n_batches * percentage_constraints_active)
-    for td in rand_collector:
-        agent.process_batch(td, constraints_active=False)
-        if progress_bar:
-            pbar.update(td.numel())
-
-    eval_returns = []
-    try:
-        for i, td in enumerate(collector):
-            td["action"] = td["action"].to(torch.float32) # Due to bug in torchrl, need to manually cast to float
-            collector.update_policy_weights_() # Check if this is necessary
-
-            loss_dict, info_dict = agent.process_batch(td, constraints_active=i >= batch_to_activate_constraints)
-
-            if log:
-                wandb.log({
-                    "reward": td["next", "reward"].mean().item(),
-                    "max step count": td["step_count"].max().item(),
-                    **loss_dict,
-                    **info_dict,
-                    "batch": i,
-                    "state distribution": wandb.Histogram(td["state"].argmax(dim=-1).cpu()),
-                    "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()),
-                    "policy 'norm'": sum((p**2).sum() for p in agent.policy_module.parameters()),
-                    "percentage_constraints_active": percentage_constraints_active,
-                })
-            if i % eval_every_n_batch == 0:
-                with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
-                    eval_data = env.rollout(100, agent.policy_module)
-                eval_return = calc_return(eval_data["next", "reward"].flatten(), gamma)
-                if log:
-                    wandb.log({
-                        "eval return": eval_return,
-                        "batch": i
-                    })
-                eval_returns.append(eval_return)
-
-            if progress_bar:
-                pbar.update(td.numel())
-    except Exception as e:
-        print(f"Training interrupted due to an error: {e}")
-        if progress_bar:
-            pbar.close()
-    return eval_returns
+def fast_policy(td):
+    # Always go up in even states, otherwise go right
+    state_idx = td["state"].argmax(dim=-1)
+    if state_idx % 2 == 0:
+        td["action"] = torch.tensor([0, 0, 0, 1], device=td.device)
+    else:
+        td["action"] = torch.tensor([0, 1, 0, 0], device=td.device)
+    return td

@@ -18,6 +18,7 @@ class ToyEnv(EnvBase):
         down_reward,
         up_reward,
         n_states,
+        shortcut_steps,
         big_reward,
         constraints_active,
         random_start=False,
@@ -27,12 +28,13 @@ class ToyEnv(EnvBase):
     ):
         super().__init__(device=device, batch_size=[])
 
-        assert n_states % 2 == 0, "n_states only tested for even numbers"
+        assert (n_states-2) % shortcut_steps == 0, "n_states must be 2 more than a multiple of shortcut_steps"
         self.left_reward = left_reward
         self.right_reward = right_reward
         self.down_reward = down_reward
         self.up_reward = up_reward
         self.n_states = n_states
+        self.shortcut_steps = shortcut_steps
         self.big_reward = big_reward
         self.random_start = random_start
 
@@ -113,7 +115,7 @@ class ToyEnv(EnvBase):
             state, dtype=torch.float32, device=self.device
         )
 
-        mask_even = state % 2 == 0
+        mask_is_shortcut = state % self.shortcut_steps == 0
 
         left_action = 0
         right_action = 1
@@ -125,14 +127,14 @@ class ToyEnv(EnvBase):
         # Enable right action by default
         next_state = torch.where(action == right_action, state + 1, next_state)
 
-        # For even pos, enable down and up actions
+        # For shortcuts, enable down and up actions
         # Down action
         next_state = torch.where(
-            mask_even & (action == down_action), state - 2, next_state
+            mask_is_shortcut & (action == down_action), state - self.shortcut_steps, next_state
         )
         # Up action
         next_state = torch.where(
-            mask_even & (action == up_action), state + 2, next_state
+            mask_is_shortcut & (action == up_action), state + self.shortcut_steps, next_state
         )
 
         # Left action
@@ -146,11 +148,11 @@ class ToyEnv(EnvBase):
 
         # Down action
         constraint_reward = torch.where(
-            mask_even & (action == down_action), 1 * self.down_reward, constraint_reward
+            mask_is_shortcut & (action == down_action), 1 * self.down_reward, constraint_reward
         )
         # Up action
         constraint_reward = torch.where(
-            mask_even & (action == up_action), 1 * self.up_reward, constraint_reward
+            mask_is_shortcut & (action == up_action), 1 * self.up_reward, constraint_reward
         )
 
         # Ensure that we can never move past the end pos
@@ -179,14 +181,17 @@ class ToyEnv(EnvBase):
             .to(self.device)
         )
 
+
+        reward = (
+            (normal_reward + constraint_reward)
+            if self.constraints_active
+            else normal_reward
+        )
+
         out = TensorDict(
             {
                 "state": next_state,
-                "reward": (
-                    (normal_reward + constraint_reward)
-                    if self.constraints_active
-                    else normal_reward
-                ),
+                "reward": reward,
                 "normal_reward": normal_reward.unsqueeze(-1),
                 "constraint_reward": constraint_reward.unsqueeze(-1),
                 "done": done,
@@ -196,39 +201,20 @@ class ToyEnv(EnvBase):
         return out
 
     @staticmethod
-    def calculate_xy(n_states, return_x, return_y, big_reward, gamma):
+    def calculate_xy(n_states, shortcut_steps, return_x, return_y, big_reward, gamma):
         # Assuming n_pos is even, calculate x and y
-        assert n_states % 2 == 0
-        nx = n_states - 2
-        ny = (n_states - 2) // 2
+        assert (n_states-2) % shortcut_steps == 0, "n_states must be 2 more than a multiple of shortcut_steps"
+        nx = n_states - 2 # Number of times we need to step 'right' to reach the end, excluding the final state
+        ny = (n_states - 2) // shortcut_steps # Number of times we need to step 'up' to reach the end, excluding the final state
         x = (return_x - big_reward * gamma**nx) / sum(gamma**k for k in range(0, nx))
         y = (return_y - big_reward * gamma**ny) / sum(gamma**k for k in range(0, ny))
         return x, y
-
-    def set_left_weight(self, left_weight):
-        self.left_weight = left_weight
-
-    def set_right_weight(self, right_weight):
-        self.right_weight = right_weight
-
-    def set_down_weight(self, down_weight):
-        self.down_weight = down_weight
-
-    def set_up_weight(self, up_weight):
-        self.up_weight = up_weight
-
-    def set_constraint_weight(self, weight):
-        # Clip weight to be between 0 and 1
-        weight = max(0, min(weight, 1))
-        self.set_left_weight(weight)
-        self.set_right_weight(weight)
-        self.set_down_weight(weight)
-        self.set_up_weight(weight)
 
 
 def get_toy_env(env_config, gamma):
     x, y = ToyEnv.calculate_xy(
         env_config["n_states"],
+        env_config["shortcut_steps"],
         env_config["return_x"],
         env_config["return_y"],
         env_config["big_reward"],
@@ -240,6 +226,7 @@ def get_toy_env(env_config, gamma):
         down_reward=y,
         up_reward=y,
         n_states=env_config["n_states"],
+        shortcut_steps=env_config["shortcut_steps"],
         big_reward=env_config["big_reward"],
         random_start=False,
         constraints_active=env_config["constraints_active"],
@@ -256,6 +243,4 @@ def get_toy_env(env_config, gamma):
     )
     check_env_specs(env)
 
-    pixel_env = None
-
-    return env, pixel_env
+    return env

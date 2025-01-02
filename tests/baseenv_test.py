@@ -9,9 +9,9 @@ from torch import Tensor
 from torchrl.envs.utils import step_mdp
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../src/envs"))
-sys.path.append(os.path.join(os.path.dirname(__file__), "../src/agents"))
+sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
 
-from toy_agents import fast_policy, slow_policy
+from agents.toy_agents import fast_policy, slow_policy
 from toy_env import ToyEnv, get_toy_env
 
 from utils import calc_return, DictWrapper
@@ -23,11 +23,13 @@ class TestToyEnv(unittest.TestCase):
     def setUp(self):
         self.config = {
             "n_states": 20,
+            "shortcut_steps": 2,
             "return_x": 2,
             "return_y": 1,
             "big_reward": 10,
             "constraints_active": False,
             "device": "cpu",
+            "max_steps": 200,
         }
         self.gamma = 0.99
         self.env = get_toy_env(self.config, self.gamma)
@@ -155,9 +157,10 @@ class TestToyEnv(unittest.TestCase):
         """Check if returns are correct for both slow and fast agents with and without constraints."""
 
         # Enable constraints
-        self.env.constraints_active = True
+        self.env.base_env.constraints_active = True
         slow_td = self.env.rollout(200, slow_policy)
         slow_return = calc_return(slow_td["next", "reward"].flatten(), gamma=self.gamma)
+        check_return = calc_return((slow_td["next", "normal_reward"]+slow_td["next", "constraint_reward"]).flatten(), gamma=self.gamma)
         self.assertAlmostEqual(slow_return, self.config["return_x"], places=3)
 
         fast_td = self.env.rollout(200, fast_policy)
@@ -165,7 +168,7 @@ class TestToyEnv(unittest.TestCase):
         self.assertAlmostEqual(fast_return, self.config["return_y"], places=3)
 
         # Disable constraints
-        self.env.constraints_active = False
+        self.env.base_env.constraints_active = False
         slow_td = self.env.rollout(200, slow_policy)
         slow_return = calc_return(slow_td["next", "reward"].flatten(), gamma=self.gamma)
         self.assertAlmostEqual(
