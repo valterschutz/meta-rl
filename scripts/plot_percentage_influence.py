@@ -2,11 +2,17 @@ import pandas as pd
 import os
 import seaborn as sns
 import matplotlib.pyplot as plt
+import argparse
 
 sns.set_style("whitegrid")
 
+# Single argument, which is the path to the data file
+parser = argparse.ArgumentParser()
+parser.add_argument("data_file", type=str, help="Path to the data file")
+args = parser.parse_args()
+
 # Load the data
-df = pd.read_csv(os.path.join(os.path.dirname(__file__), "../data/percentage_influence.csv"))
+df = pd.read_csv(args.data_file)
 
 sns.lineplot(
     data=df,
