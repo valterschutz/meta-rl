@@ -10,7 +10,7 @@ import torch
 
 from trainers import train_base_agent
 
-n_evals = 5
+n_evals = 2
 percentages = [i/10 for i in range(10)]
 rows = [] # A list of tuples where each tuple contains (percentage, n_eval, return)
 
@@ -20,10 +20,10 @@ try:
         for i in range(n_evals):
             returns = train_base_agent(
                     device=torch.device("cpu"),
-                    total_frames=25_000,
-                    min_buffer_size=200,
-                    n_states=23,
-                    shortcut_steps=3,
+                    total_frames=50_000,
+                    min_buffer_size=0,
+                    n_states=30,
+                    shortcut_steps=2,
                     return_x=5,
                     return_y=1,
                     percentage_constraints_active=percentage,
@@ -31,12 +31,14 @@ try:
                     log=False,
                     progress_bar=False
             )
-            rows.append((percentage, i, sum(returns)/len(returns)))
+            print(f"Percentage: {percentage}, n_eval: {i}, returns: {returns}")
+            # rows.append((percentage, i, sum(returns)/len(returns)))
+            rows.append((percentage, i, returns))
             pbar.update(1)
 except KeyboardInterrupt:
     pbar.close()
     print("Interrupted")
 
-df = pd.DataFrame(rows, columns=["percentage", "n_eval", "mean_return"])
+df = pd.DataFrame(rows, columns=["percentage", "n_eval", "returns"])
 # Save the dataframe to a csv file, relative to this file's location
 df.to_csv(os.path.join(os.path.dirname(__file__), "../data/percentage_influence.csv"))

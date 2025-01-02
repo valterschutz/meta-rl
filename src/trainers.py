@@ -47,7 +47,7 @@ def train_base_agent(device, total_frames, min_buffer_size, n_states, shortcut_s
     env_max_steps = 5*n_states
     big_reward = 10.0
     gamma = 0.99
-    batch_size = 200
+    batch_size = n_states*10
     sub_batch_size = 20
     num_epochs = 100
     lr = 5e-3
