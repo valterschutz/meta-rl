@@ -149,15 +149,13 @@ class BaseAgent:
 
         return loss_dict, info_dict
 
-def train_base_agent(device, total_frames, min_buffer_size, n_states, percentage_constraints_active, times_to_eval, log, progress_bar):
+def train_base_agent(device, total_frames, min_buffer_size, n_states, return_x, return_y, percentage_constraints_active, times_to_eval, log, progress_bar):
     env_max_steps = 100
-    return_x = 2
-    return_y = 1
     big_reward = 10.0
     gamma = 0.99
     batch_size = 200
     sub_batch_size = 20
-    num_epochs = 10
+    num_epochs = 100
     lr = 1e-2
     target_eps = 0.99
     alpha = 0.7
