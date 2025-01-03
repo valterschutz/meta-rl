@@ -6,13 +6,13 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
 import torch
 
 import wandb
-from trainers import train_base_agent
+from trainers import train_toy_base_agent
 
 wandb.init(project="clean-base-sac")
 # n_states = 302
 n_states = 20 # min with constraints: 20
 # return_x = 10*0.99**n_states - 1e-3 # Almost no cost to move sideways
-returns = train_base_agent(
+returns = train_toy_base_agent(
     device=torch.device("cpu"),
     total_frames=5_000,
     min_buffer_size=0,
