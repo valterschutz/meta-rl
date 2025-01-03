@@ -43,13 +43,14 @@ from utils import calc_return
 from agents.toy_agents import BaseAgent
 
 
-def train_base_agent(device, total_frames, min_buffer_size, n_states, shortcut_steps, return_x, return_y, percentage_constraints_active, times_to_eval, log, progress_bar):
-    env_max_steps = 5*n_states
+def train_base_agent(device, total_frames, min_buffer_size, n_states, shortcut_steps, return_x, return_y, when_constraints_active, times_to_eval, log, progress_bar, batch_size, sub_batch_size, num_epochs):
+    """
+    Train a base agent in the toy environment.
+    """
+    # env_max_steps = 5*n_states
+    env_max_steps = total_frames
     big_reward = 10.0
     gamma = 0.99
-    batch_size = n_states*10
-    sub_batch_size = 20
-    num_epochs = 100
     lr = 5e-3
     target_eps = 0.99
     alpha = 0.7
@@ -119,7 +120,8 @@ def train_base_agent(device, total_frames, min_buffer_size, n_states, shortcut_s
 
     if progress_bar:
         pbar = tqdm(total=total_frames)
-    batch_to_activate_constraints = int(n_batches * percentage_constraints_active)
+    if isinstance(when_constraints_active, float):
+        batch_to_activate_constraints = int(n_batches * when_constraints_active)
     for td in rand_collector:
         agent.process_batch(td, constraints_active=False)
         if progress_bar:
@@ -131,7 +133,13 @@ def train_base_agent(device, total_frames, min_buffer_size, n_states, shortcut_s
             td["action"] = td["action"].to(torch.float32) # Due to bug in torchrl, need to manually cast to float
             collector.update_policy_weights_() # Check if this is necessary
 
-            loss_dict, info_dict = agent.process_batch(td, constraints_active=i >= batch_to_activate_constraints)
+            # Constraints are either deterministically set at some batch or decided by a callback function
+            if isinstance(when_constraints_active, float):
+                constraints_active: bool = i >= batch_to_activate_constraints
+            elif callable(when_constraints_active):
+                constraints_active: bool = when_constraints_active(td)
+
+            loss_dict, info_dict = agent.process_batch(td, constraints_active=constraints_active)
 
             if log:
                 wandb.log({
@@ -143,7 +151,7 @@ def train_base_agent(device, total_frames, min_buffer_size, n_states, shortcut_s
                     "state distribution": wandb.Histogram(td["state"].argmax(dim=-1).cpu()),
                     "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()),
                     "policy 'norm'": sum((p**2).sum() for p in agent.policy_module.parameters()),
-                    "percentage_constraints_active": percentage_constraints_active,
+                    "when_constraints_active": when_constraints_active if isinstance(when_constraints_active, float) else 0.0,
                 })
             if i % eval_every_n_batch == 0:
                 with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
@@ -164,3 +172,14 @@ def train_base_agent(device, total_frames, min_buffer_size, n_states, shortcut_s
         if progress_bar:
             pbar.close()
     return eval_returns
+
+def train_meta_agent(
+        device,
+        n_base_episodes,
+        log,
+        progress_bar,
+        batch_size,
+        sub_batch_size,
+        num_epochs
+):
+    pass

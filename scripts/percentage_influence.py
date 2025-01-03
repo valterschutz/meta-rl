@@ -10,7 +10,7 @@ import torch
 
 from trainers import train_base_agent
 
-n_evals = 2
+n_evals = 4
 percentages = [i/10 for i in range(10)]
 rows = [] # A list of tuples where each tuple contains (percentage, n_eval, return)
 
@@ -19,19 +19,22 @@ try:
     for percentage in percentages:
         for i in range(n_evals):
             returns = train_base_agent(
-                    device=torch.device("cpu"),
-                    total_frames=50_000,
-                    min_buffer_size=0,
-                    n_states=30,
-                    shortcut_steps=2,
-                    return_x=5,
-                    return_y=1,
-                    percentage_constraints_active=percentage,
-                    times_to_eval=10,
-                    log=False,
-                    progress_bar=False
+                device=torch.device("cpu"),
+                total_frames=40_000,
+                min_buffer_size=0,
+                n_states=30,
+                shortcut_steps=2,
+                return_x=5,
+                return_y=1,
+                when_constraints_active=0.75,
+                times_to_eval=20,
+                log=False,
+                progress_bar=False,
+                batch_size = 200,
+                sub_batch_size = 20,
+                num_epochs = 100
             )
-            print(f"Percentage: {percentage}, n_eval: {i}, returns: {returns}")
+            # print(f"Percentage: {percentage}, n_eval: {i}, returns: {returns}")
             # rows.append((percentage, i, sum(returns)/len(returns)))
             rows.append((percentage, i, returns))
             pbar.update(1)
