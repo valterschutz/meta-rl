@@ -10,7 +10,8 @@ from trainers import train_base_agent
 
 wandb.init(project="clean-base-sac")
 n_states = 102
-return_x = 10*0.99**n_states - 1e-3 # Almost no cost to move sideways
+# return_x = 10*0.99**n_states - 1e-3 # Almost no cost to move sideways
+return_x = 1e-3
 returns = train_base_agent(
     device=torch.device("cpu"),
     total_frames=50_000,
