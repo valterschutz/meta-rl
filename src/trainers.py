@@ -49,7 +49,7 @@ def train_base_agent(device, total_frames, min_buffer_size, n_states, shortcut_s
     """
     # env_max_steps = 5*n_states
     env_max_steps = total_frames
-    big_reward = 10.0
+    big_reward = 1.0
     gamma = 0.99
     lr = 5e-3
     target_eps = 0.99
@@ -143,7 +143,9 @@ def train_base_agent(device, total_frames, min_buffer_size, n_states, shortcut_s
 
             if log:
                 wandb.log({
-                    "reward": td["next", "reward"].mean().item(),
+                    "normal_reward": td["next", "normal_reward"].mean().item(),
+                    "constraint_reward": td["next", "constraint_reward"].mean().item(),
+                    "reward": (td["next", "normal_reward"] + td["next", "constraint_reward"]).mean().item(),
                     "max step count": td["step_count"].max().item(),
                     **loss_dict,
                     **info_dict,
@@ -151,7 +153,7 @@ def train_base_agent(device, total_frames, min_buffer_size, n_states, shortcut_s
                     "state distribution": wandb.Histogram(td["state"].argmax(dim=-1).cpu()),
                     "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()),
                     "policy 'norm'": sum((p**2).sum() for p in agent.policy_module.parameters()),
-                    "when_constraints_active": when_constraints_active if isinstance(when_constraints_active, float) else 0.0,
+                    "constraints_active": float(constraints_active)
                 })
             if i % eval_every_n_batch == 0:
                 with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):

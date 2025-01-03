@@ -62,8 +62,10 @@ class BaseAgent:
 
         n_states = self.state_spec["state"].shape[-1]
         n_actions = self.action_spec.shape[-1]
+        hidden_units = 1
         actor_net = nn.Sequential(
-            nn.Linear(n_states, n_actions, device=device),
+            nn.Linear(n_states, hidden_units, device=device),
+            nn.Linear(hidden_units, n_actions, device=device),
         )
 
         policy_module = TensorDictModule(
@@ -80,7 +82,8 @@ class BaseAgent:
         )
 
         qvalue_net = nn.Sequential(
-            nn.Linear(n_states, n_actions, device=device),
+            nn.Linear(n_states, hidden_units, device=device),
+            nn.Linear(hidden_units, n_actions, device=device),
         )
         self.qvalue_module = ValueOperator(
             module=qvalue_net,
@@ -92,7 +95,9 @@ class BaseAgent:
             actor_network=self.policy_module,
             qvalue_network=self.qvalue_module,
             num_actions=n_actions,
-            target_entropy=0.0, # TODO: does this work?
+            # alpha_init=1e-3,
+            # max_alpha=1e-3,
+            target_entropy=0.0,
             # alpha_init=0.1,
         )
 
