@@ -102,7 +102,6 @@ class ToyEnv(EnvBase):
     def _step(self, td):
         state = td["state"]
         action = td["action"]  # Action order: left, right, down, up
-        # x, y, n_pos, big_reward = self.x, self.y, self.n_pos, self.big_reward
         state = torch.argmax(state, dim=-1)
         action = torch.argmax(action, dim=-1)
 
@@ -115,44 +114,35 @@ class ToyEnv(EnvBase):
             state, dtype=torch.float32, device=self.device
         )
 
-        mask_is_shortcut = state % self.shortcut_steps == 0
-
         left_action = 0
         right_action = 1
         down_action = 2
         up_action = 3
 
-        # Enable left action by default
-        next_state = torch.where(action == left_action, state - 1, next_state)
-        # Enable right action by default
-        next_state = torch.where(action == right_action, state + 1, next_state)
-
-        # For shortcuts, enable down and up actions
-        # Down action
-        next_state = torch.where(
-            mask_is_shortcut & (action == down_action), state - self.shortcut_steps, next_state
-        )
-        # Up action
-        next_state = torch.where(
-            mask_is_shortcut & (action == up_action), state + self.shortcut_steps, next_state
-        )
-
         # Left action
+        next_state = torch.where(action == left_action, state - 1, next_state)
         constraint_reward = torch.where(
             action == left_action, 1 * self.left_reward, constraint_reward
         )
         # Right action
+        next_state = torch.where(action == right_action, state + 1, next_state)
         constraint_reward = torch.where(
             action == right_action, 1 * self.right_reward, constraint_reward
         )
 
         # Down action
+        next_state = torch.where(
+            action == down_action, state - self.shortcut_steps, next_state
+        )
         constraint_reward = torch.where(
-            mask_is_shortcut & (action == down_action), 1 * self.down_reward, constraint_reward
+            action == down_action, 1 * self.down_reward, constraint_reward
         )
         # Up action
+        next_state = torch.where(
+            action == up_action, state + self.shortcut_steps, next_state
+        )
         constraint_reward = torch.where(
-            mask_is_shortcut & (action == up_action), 1 * self.up_reward, constraint_reward
+            action == up_action, 1 * self.up_reward, constraint_reward
         )
 
         # Ensure that we can never move past the end pos
