@@ -32,6 +32,7 @@ from tqdm import tqdm
 from torchrl.objectives import ValueEstimators
 from torchrl.data import TensorDictReplayBuffer
 from torchrl.data.replay_buffers import PrioritizedSampler, ListStorage
+from torch.distributions.bernoulli import Bernoulli
 
 import wandb
 
@@ -43,14 +44,14 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "./"))
 from envs.toy_env import ToyEnv
 from utils import calc_return
 
-class BaseAgent:
-    def __init__(self, action_spec, state_spec, device, buffer_size, min_buffer_size, batch_size, sub_batch_size, num_epochs, lr, gamma, target_eps, alpha, beta, max_grad_norm):
-        self.action_spec = action_spec
-        self.state_spec = state_spec
+class MetaAgent:
+    """
+    Meta agent that outputs a boolean action.
+    """
+    def __init__(self, state_keys, device, buffer_size, min_buffer_size, sub_batch_size, num_epochs, lr, gamma, target_eps, alpha, beta, max_grad_norm):
         self.device = device
         self.buffer_size = buffer_size
         self.min_buffer_size = min_buffer_size
-        self.batch_size = batch_size
         self.sub_batch_size = sub_batch_size
         self.num_epochs = num_epochs
         self.lr = lr
@@ -60,10 +61,11 @@ class BaseAgent:
         self.beta = beta
         self.max_grad_norm = max_grad_norm
 
-        n_states = self.state_spec["state"].shape[-1]
-        n_actions = self.action_spec.shape[-1]
+        n_states = len(state_keys)
         actor_net = nn.Sequential(
-            nn.Linear(n_states, n_actions, device=device),
+            nn.Linear(n_states, hidden_units, device=device),
+            nn.Linear(hidden_units, hidden_units, device=device),
+            nn.Linear(hidden_units, 1, device=device),
         )
 
         policy_module = TensorDictModule(
@@ -74,24 +76,27 @@ class BaseAgent:
             module=policy_module,
             spec=self.action_spec,
             in_keys=["logits"],
-            distribution_class=OneHotCategorical,
+            distribution_class=Bernoulli,
             default_interaction_type=InteractionType.RANDOM, # TODO: should this be random?
             return_log_prob=True,
         )
 
         qvalue_net = nn.Sequential(
-            nn.Linear(n_states, n_actions, device=device),
+            nn.Linear(n_states, hidden_units, device=device),
+            nn.Linear(hidden_units, hidden_units, device=device),
+            nn.Linear(hidden_units, n_actions, device=device),
         )
         self.qvalue_module = ValueOperator(
             module=qvalue_net,
-            in_keys=["state"],
+            in_keys=state_keys,
             out_keys=["action_value"],
         )
 
         self.loss_module = DiscreteSACLoss(
             actor_network=self.policy_module,
             qvalue_network=self.qvalue_module,
-            num_actions=n_actions,
+            action_space="binary",
+            num_actions=1,
             target_entropy=0.0, # TODO: does this work?
             # alpha_init=0.1,
         )
@@ -107,7 +112,7 @@ class BaseAgent:
             storage=LazyTensorStorage(max_size=self.buffer_size, device=self.device),
             sampler=PrioritizedSampler(max_capacity=self.buffer_size, alpha=self.alpha, beta=self.beta),
             priority_key="td_error",
-            batch_size=self.batch_size,
+            batch_size=1,
         )
 
 
@@ -122,11 +127,7 @@ class BaseAgent:
             grads = []
 
             subdata = self.replay_buffer.sample(self.sub_batch_size)
-            # Interpret rewards differently depending on the batch
-            if constraints_active:
-                subdata["next", "reward"] = subdata["next", "normal_reward"] + subdata["next", "constraint_reward"]
-            else:
-                subdata["next", "reward"] = subdata["next", "normal_reward"]
+
             loss_vals = self.loss_module(subdata.to(self.device))
             loss = 0
             for loss_key in self.loss_keys:
@@ -149,18 +150,3 @@ class BaseAgent:
         }
 
         return loss_dict, info_dict
-
-def slow_policy(td):
-    # Always go right
-    td["action"] = torch.tensor([0, 1, 0, 0], device=td.device)
-    return td
-
-
-def fast_policy(td):
-    # Always go up in even states, otherwise go right
-    state_idx = td["state"].argmax(dim=-1)
-    if state_idx % 2 == 0:
-        td["action"] = torch.tensor([0, 0, 0, 1], device=td.device)
-    else:
-        td["action"] = torch.tensor([0, 1, 0, 0], device=td.device)
-    return td

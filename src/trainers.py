@@ -174,12 +174,67 @@ def train_base_agent(device, total_frames, min_buffer_size, n_states, shortcut_s
     return eval_returns
 
 def train_meta_agent(
-        device,
-        n_base_episodes,
-        log,
-        progress_bar,
-        batch_size,
-        sub_batch_size,
-        num_epochs
+    device,
+    n_base_episodes,
+    log,
+    progress_bar,
+    batch_size,
+    sub_batch_size,
+    num_epochs
 ):
-    pass
+    meta_agent = MetaAgent(state_keys, device, buffer_size, min_buffer_size, sub_batch_size, num_epochs, lr, gamma, target_eps, alpha, beta, max_grad_norm)
+    # Define the meta callback, a function that takes the base agents tensordict and returns a boolean that indicates if
+    # the constraints should be activated
+    def meta_callback(base_td):
+        return True
+    eval_returns = []
+    try:
+        for i in range(n_base_episodes):
+            base_returns = train_base_agent(
+                device=torch.device("cpu"),
+                total_frames=50_000,
+                min_buffer_size=0,
+                n_states=n_states,
+                shortcut_steps=5,
+                return_x=return_x,
+                return_y=-100,
+                when_constraints_active=meta_callback,
+                times_to_eval=20,
+                log=True,
+                progress_bar=True,
+                batch_size = 200,
+                sub_batch_size = 20,
+                num_epochs = 100
+            )
+
+            if log:
+                wandb.log({
+                    "reward": td["next", "reward"].mean().item(),
+                    "max step count": td["step_count"].max().item(),
+                    **loss_dict,
+                    **info_dict,
+                    "batch": i,
+                    "state distribution": wandb.Histogram(td["state"].argmax(dim=-1).cpu()),
+                    "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()),
+                    "policy 'norm'": sum((p**2).sum() for p in agent.policy_module.parameters()),
+                    "when_constraints_active": when_constraints_active if isinstance(when_constraints_active, float) else 0.0,
+                })
+            if i % eval_every_n_batch == 0:
+                with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
+                    eval_data = env.rollout(100, agent.policy_module)
+                # Always use constrained return for evaluation
+                eval_return = calc_return((eval_data["next", "normal_reward"]+eval_data["next","constraint_reward"]).flatten(), gamma)
+                if log:
+                    wandb.log({
+                        "eval return": eval_return,
+                        "batch": i
+                    })
+                eval_returns.append(eval_return)
+
+            if progress_bar:
+                pbar.update(td.numel())
+    except Exception as e:
+        print(f"Training interrupted due to an error: {e}")
+        if progress_bar:
+            pbar.close()
+    return eval_returns

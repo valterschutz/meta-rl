@@ -10,15 +10,15 @@ from trainers import train_base_agent
 
 wandb.init(project="clean-base-sac")
 n_states = 102
-return_x = 10*0.99**50 - 1e-3
+return_x = 10*0.99**n_states - 1e-3 # Almost no cost to move sideways
 returns = train_base_agent(
     device=torch.device("cpu"),
     total_frames=50_000,
     min_buffer_size=0,
     n_states=n_states,
-    shortcut_steps=10,
+    shortcut_steps=5,
     return_x=return_x,
-    return_y=-10,
+    return_y=-100,
     when_constraints_active=0.01,
     times_to_eval=20,
     log=True,
