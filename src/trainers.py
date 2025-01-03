@@ -160,7 +160,7 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, shortc
                 })
             if i % eval_every_n_batch == 0:
                 with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
-                    eval_data = env.rollout(100, agent.policy_module)
+                    eval_data = env.rollout(1000, agent.policy_module)
                 # Always use constrained return for evaluation
                 eval_return = calc_return((eval_data["next", "normal_reward"]+eval_data["next","constraint_reward"]).flatten(), gamma)
                 if log:
@@ -196,7 +196,7 @@ def train_point_base_agent(device, total_frames, min_buffer_size, when_constrain
     # Custom transform for adding constraints
     class NegativeNormTransform(Transform):
         def _apply_transform(self, t: torch.Tensor) -> None:
-            return -t.norm()
+            return -t.norm().unsqueeze(-1)
 
         # The transform must also modify the data at reset time
         def _reset(
@@ -304,7 +304,7 @@ def train_point_base_agent(device, total_frames, min_buffer_size, when_constrain
                 })
             if i % eval_every_n_batch == 0:
                 with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
-                    eval_data = env.rollout(100, agent.policy_module)
+                    eval_data = env.rollout(10_000, agent.policy_module)
                 # Always use constrained return for evaluation
                 eval_return = calc_return((eval_data["next", "normal_reward"]+eval_data["next","constraint_reward"]).flatten(), gamma)
                 if log:

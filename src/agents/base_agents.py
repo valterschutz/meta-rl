@@ -216,7 +216,7 @@ class PointBaseAgent:
             qvalue_network=self.qvalue_module,
             # alpha_init=1e-3,
             # max_alpha=1e-3,
-            target_entropy=0.0,
+            # target_entropy=0.0,
             # alpha_init=0.1,
         )
 

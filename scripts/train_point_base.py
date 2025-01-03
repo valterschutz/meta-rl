@@ -10,14 +10,14 @@ from trainers import train_point_base_agent
 
 wandb.init(project="point-base")
 returns = train_point_base_agent(
-    device=torch.device("cpu"),
-    total_frames=5_000,
+    device=torch.device("cuda"),
+    total_frames=50_000,
     min_buffer_size=0,
     when_constraints_active=0.99,
-    times_to_eval=20,
+    times_to_eval=10,
     log=True,
     progress_bar=True,
-    batch_size = 200,
-    sub_batch_size = 20,
+    batch_size = 1_000,
+    sub_batch_size = 100,
     num_epochs = 100
 )
