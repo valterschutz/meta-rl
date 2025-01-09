@@ -44,7 +44,7 @@ from envs.toy_env import ToyEnv
 from utils import calc_return
 
 class ToyBaseAgent:
-    def __init__(self, action_spec, state_spec, device, buffer_size, min_buffer_size, batch_size, sub_batch_size, num_epochs, lr, gamma, target_eps, alpha, beta, max_grad_norm):
+    def __init__(self, action_spec, state_spec, device, buffer_size, min_buffer_size, batch_size, sub_batch_size, num_epochs, actor_lr, critic_lr, alpha_lr, gamma, target_eps, alpha, beta, max_grad_norm):
         self.action_spec = action_spec
         self.state_spec = state_spec
         self.device = device
@@ -53,7 +53,9 @@ class ToyBaseAgent:
         self.batch_size = batch_size
         self.sub_batch_size = sub_batch_size
         self.num_epochs = num_epochs
-        self.lr = lr
+        self.actor_lr = actor_lr
+        self.critic_lr = critic_lr
+        self.alpha_lr = alpha_lr
         self.gamma = gamma
         self.target_eps = target_eps
         self.alpha = alpha
@@ -95,18 +97,35 @@ class ToyBaseAgent:
             actor_network=self.policy_module,
             qvalue_network=self.qvalue_module,
             num_actions=n_actions,
-            # alpha_init=1e-3,
-            # max_alpha=1e-3,
+            # delay_qvalue=True,
+            # num_qvalue_nets=2,
+            # alpha_init=0.9,
+            min_alpha=0.1,
+            # max_alpha=1,
             target_entropy=0.0,
             # alpha_init=0.1,
         )
 
         self.loss_module.make_value_estimator(ValueEstimators.TD0, gamma=self.gamma)
+        # self.loss_module.make_value_estimator(gamma=self.gamma)
         self.loss_keys = ["loss_actor", "loss_qvalue", "loss_alpha"]
 
         self.target_net = SoftUpdate(self.loss_module, eps=self.target_eps)
 
-        self.optim = torch.optim.Adam(self.loss_module.parameters(), self.lr)
+        self.optimizers = {
+            "actor": torch.optim.Adam(
+            list(self.loss_module.actor_network_params.flatten_keys().values()),
+            lr=self.actor_lr
+            ),
+            "critic": torch.optim.Adam(
+            list(self.loss_module.qvalue_network_params.flatten_keys().values()),
+            lr=self.critic_lr
+            ),
+            "alpha": torch.optim.Adam(
+            [self.loss_module.log_alpha],
+            lr=self.alpha_lr
+            )
+        }
 
         self.replay_buffer = TensorDictReplayBuffer(
             storage=LazyTensorStorage(max_size=self.buffer_size, device=self.device),
@@ -122,9 +141,11 @@ class ToyBaseAgent:
         self.replay_buffer.extend(data_view.to(self.device))
         if len(self.replay_buffer) < self.min_buffer_size:
             return
+        loss_dict = {loss_key: [] for loss_key in self.loss_keys}
+        grads = []
+        alphas = []
+        entropy = []
         for _ in range(self.num_epochs):
-            loss_dict = {loss_key: [] for loss_key in self.loss_keys}
-            grads = []
 
             subdata = self.replay_buffer.sample(self.sub_batch_size)
             # Interpret rewards differently depending on the batch
@@ -137,12 +158,16 @@ class ToyBaseAgent:
             for loss_key in self.loss_keys:
                 loss += loss_vals[loss_key]
                 loss_dict[loss_key].append(loss_vals[loss_key].item())
-
             loss.backward()
+
+            alphas.append(loss_vals["alpha"].item())
+            entropy.append(loss_vals["entropy"].item())
+
             grad = torch.nn.utils.clip_grad_norm_(self.loss_module.parameters(), self.max_grad_norm)
             grads.append(grad)
-            self.optim.step()
-            self.optim.zero_grad()
+            for optim in self.optimizers.values():
+                optim.step()
+                optim.zero_grad()
 
             # Update target network
             self.target_net.step()
@@ -151,6 +176,8 @@ class ToyBaseAgent:
         loss_dict = {loss_key: sum(loss_dict[loss_key]) / len(loss_dict[loss_key]) for loss_key in self.loss_keys}
         info_dict = {
            "mean_gradient_norm": sum(grads) / len(grads),
+           "mean_alpha": sum(alphas) / len(alphas),
+           "mean_entropy": sum(entropy) / len(entropy),
         }
 
         return loss_dict, info_dict

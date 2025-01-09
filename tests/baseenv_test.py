@@ -11,8 +11,8 @@ from torchrl.envs.utils import step_mdp
 sys.path.append(os.path.join(os.path.dirname(__file__), "../src/envs"))
 sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
 
-from agents.toy_agents import fast_policy, slow_policy
-from toy_env import ToyEnv, get_toy_env
+from src.agents.base_agents import fast_policy, slow_policy
+from src.envs.toy_env import ToyEnv, get_toy_env
 
 from utils import calc_return, DictWrapper
 

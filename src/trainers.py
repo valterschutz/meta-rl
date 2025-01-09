@@ -49,11 +49,14 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, shortc
     """
     Train a base agent in the toy environment.
     """
-    # env_max_steps = 5*n_states
-    env_max_steps = total_frames
+    env_max_steps = 5*n_states
+    # env_max_steps = total_frames
     big_reward = 1.0
     gamma = 0.99
-    lr = 5e-3
+    actor_lr = 5e-3
+    critic_lr = 5e-3
+    alpha_lr = 5e-3
+    # lr = 1e-3
     target_eps = 0.99
     alpha = 0.7
     beta = 0.5
@@ -94,7 +97,9 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, shortc
         batch_size = batch_size,
         sub_batch_size = sub_batch_size,
         num_epochs = num_epochs,
-        lr = lr,
+        actor_lr = actor_lr,
+        critic_lr = critic_lr,
+        alpha_lr = alpha_lr,
         gamma = gamma,
         target_eps = target_eps,
         alpha=alpha,
@@ -152,8 +157,8 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, shortc
                     **loss_dict,
                     **info_dict,
                     "batch": i,
-                    "state distribution": wandb.Histogram(td["state"].argmax(dim=-1).cpu()),
-                    "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()),
+                    "next state distribution": wandb.Histogram(td["next","state"].argmax(dim=-1).cpu()+1),
+                    "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()+1),
                     "policy 'norm'": sum((p**2).sum() for p in agent.policy_module.parameters()),
                     "constraints_active": float(constraints_active)
                 })
