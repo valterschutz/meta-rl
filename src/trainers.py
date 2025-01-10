@@ -45,17 +45,19 @@ from utils import calc_return
 from agents.base_agents import ToySACAgent, PointBaseAgent, ReacherBaseAgent
 
 
-def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, shortcut_steps, return_x, return_y, when_constraints_active, times_to_eval, log, progress_bar, batch_size, sub_batch_size, num_epochs):
+def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, big_reward, shortcut_steps, return_x, return_y, when_constraints_active, times_to_eval, log, progress_bar, batch_size, sub_batch_size, num_epochs):
     """
     Train a base agent in the toy environment.
     """
     env_max_steps = 5*n_states
     # env_max_steps = total_frames
-    big_reward = 10.0
     gamma = 0.99
-    actor_lr = 1e-2
-    critic_lr = 1e-2
-    alpha_lr = 1e-2
+    # actor_lr = 7e-2
+    # critic_lr = 7e-2
+    # alpha_lr = 7e-2
+    actor_lr = 1e-1
+    critic_lr = 1e-1
+    alpha_lr = 1e-1
     target_eps = 0.99
     alpha = 0.7
     beta = 0.5

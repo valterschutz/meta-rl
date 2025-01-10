@@ -98,7 +98,7 @@ class ToySACAgent:
             num_actions=n_actions,
             delay_qvalue=True,
             num_qvalue_nets=2,
-            target_entropy_weight=0.2,
+            # target_entropy_weight=0.2,
             target_entropy=0.0,
             loss_function="l2"
         )
