@@ -42,7 +42,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "./"))
 
 from envs.toy_env import ToyEnv
 from utils import calc_return
-from agents.base_agents import ToyBaseAgent, PointBaseAgent, ReacherBaseAgent
+from agents.base_agents import ToySACAgent, PointBaseAgent, ReacherBaseAgent
 
 
 def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, shortcut_steps, return_x, return_y, when_constraints_active, times_to_eval, log, progress_bar, batch_size, sub_batch_size, num_epochs):
@@ -88,7 +88,7 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, shortc
     )
     # check_env_specs(env)
 
-    agent = ToyBaseAgent(
+    agent = ToySACAgent(
         state_spec=env.state_spec,
         action_spec=env.action_spec,
         device=device,
