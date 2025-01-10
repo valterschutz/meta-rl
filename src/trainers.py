@@ -42,26 +42,15 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "./"))
 
 from envs.toy_env import ToyEnv
 from utils import calc_return
-from agents.base_agents import ToySACAgent, PointBaseAgent, ReacherBaseAgent
+from agents.base_agents import ToySACAgent, ToyDDPGAgent, PointBaseAgent, ReacherBaseAgent
 
 
-def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, big_reward, shortcut_steps, return_x, return_y, when_constraints_active, times_to_eval, log, progress_bar, batch_size, sub_batch_size, num_epochs):
+def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, big_reward, shortcut_steps, return_x, return_y, when_constraints_active, times_to_eval, log, progress_bar, batch_size, sub_batch_size, num_epochs, agent_alg):
     """
     Train a base agent in the toy environment.
     """
     env_max_steps = 5*n_states
-    # env_max_steps = total_frames
     gamma = 0.99
-    # actor_lr = 7e-2
-    # critic_lr = 7e-2
-    # alpha_lr = 7e-2
-    actor_lr = 1e-1
-    critic_lr = 1e-1
-    alpha_lr = 1e-1
-    target_eps = 0.99
-    alpha = 0.7
-    beta = 0.5
-    max_grad_norm = 100.0
 
     n_batches = total_frames // batch_size
     eval_every_n_batch = n_batches // times_to_eval
@@ -89,26 +78,31 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, big_re
         env,
         transforms
     )
-    # check_env_specs(env)
 
-    agent = ToySACAgent(
-        state_spec=env.state_spec,
-        action_spec=env.action_spec,
-        device=device,
-        buffer_size = total_frames,
-        min_buffer_size = min_buffer_size,
-        batch_size = batch_size,
-        sub_batch_size = sub_batch_size,
-        num_epochs = num_epochs,
-        actor_lr = actor_lr,
-        critic_lr = critic_lr,
-        alpha_lr = alpha_lr,
-        gamma = gamma,
-        target_eps = target_eps,
-        alpha=alpha,
-        beta=beta,
-        max_grad_norm = max_grad_norm
-    )
+    if agent_alg == "SAC":
+        agent = ToySACAgent(
+            state_spec=env.state_spec,
+            action_spec=env.action_spec,
+            device=device,
+            buffer_size = total_frames,
+            min_buffer_size = min_buffer_size,
+            batch_size = batch_size,
+            sub_batch_size = sub_batch_size,
+            num_epochs = num_epochs,
+            gamma = gamma,
+        )
+    elif agent_alg == "DDPG":
+        agent = ToyDDPGAgent(
+            state_spec=env.state_spec,
+            action_spec=env.action_spec,
+            device=device,
+            buffer_size = total_frames,
+            min_buffer_size = min_buffer_size,
+            batch_size = batch_size,
+            sub_batch_size = sub_batch_size,
+            num_epochs = num_epochs,
+            gamma = gamma,
+        )
 
     rand_collector = SyncDataCollector(
         env,
@@ -140,7 +134,7 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, big_re
     eval_returns = []
     try:
         for i, td in enumerate(collector):
-            td["action"] = td["action"].to(torch.float32) # Due to bug in torchrl, need to manually cast to float
+            # td["action"] = td["action"].to(torch.float32) # Due to bug in torchrl, need to manually cast to float
             collector.update_policy_weights_() # Check if this is necessary
 
             # Constraints are either deterministically set at some batch or decided by a callback function
@@ -163,6 +157,7 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, big_re
                     "next state distribution": wandb.Histogram(td["next","observation"].argmax(dim=-1).cpu()+1),
                     "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()+1),
                     "policy 'norm'": sum((p**2).sum() for p in agent.policy_module.parameters()),
+                    "value 'norm'": sum((p**2).sum() for p in agent.qvalue_module.parameters()),
                     "constraints_active": float(constraints_active)
                 })
             if i % eval_every_n_batch == 0:
