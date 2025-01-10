@@ -53,10 +53,10 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, shortc
     # env_max_steps = total_frames
     big_reward = 10.0
     gamma = 0.99
-    actor_lr = 3e-4
-    critic_lr = 3e-4
-    alpha_lr = 3e-4
-    target_eps = 0.995
+    actor_lr = 1e-2
+    critic_lr = 1e-2
+    alpha_lr = 1e-2
+    target_eps = 0.99
     alpha = 0.7
     beta = 0.5
     max_grad_norm = 100.0
@@ -68,7 +68,7 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, shortc
         StepCounter(max_steps=env_max_steps),
         DTypeCastTransform(dtype_in=torch.long, dtype_out=torch.float32, in_keys=["observation"])
     )
-    x, y = ToyEnv.calculate_xy(n_states=n_states, shortcut_steps=shortcut_steps, return_x=return_x, return_y=return_y, big_reward=big_reward, gamma=gamma)
+    x, y = ToyEnv.calculate_xy(n_states=n_states, shortcut_steps=shortcut_steps, return_x=return_x, return_y=return_y, big_reward=big_reward, punishment=0.0, gamma=gamma)
     env = ToyEnv(
         left_reward=x,
         right_reward=x,
@@ -77,6 +77,7 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, shortc
         n_states=n_states,
         shortcut_steps=shortcut_steps,
         big_reward=big_reward,
+        punishment=0.0,
         constraints_active=False,
         random_start=False,
         seed=None,
@@ -157,7 +158,7 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, shortc
                     **loss_dict,
                     **info_dict,
                     "batch": i,
-                    "next state distribution": wandb.Histogram(td["next","state"].argmax(dim=-1).cpu()+1),
+                    "next state distribution": wandb.Histogram(td["next","observation"].argmax(dim=-1).cpu()+1),
                     "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()+1),
                     "policy 'norm'": sum((p**2).sum() for p in agent.policy_module.parameters()),
                     "constraints_active": float(constraints_active)

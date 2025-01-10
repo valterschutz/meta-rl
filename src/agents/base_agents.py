@@ -47,7 +47,6 @@ from utils import calc_return
 class ToySACAgent:
     def __init__(self, action_spec, state_spec, device, buffer_size, min_buffer_size, batch_size, sub_batch_size, num_epochs, actor_lr, critic_lr, alpha_lr, gamma, target_eps, alpha, beta, max_grad_norm):
         self.action_spec = action_spec
-        # self.action_spec = action_spec[(0,) * batch_size]
         self.state_spec = state_spec
         self.device = device
         self.buffer_size = buffer_size
@@ -99,7 +98,8 @@ class ToySACAgent:
             num_actions=n_actions,
             delay_qvalue=True,
             num_qvalue_nets=2,
-            target_entropy=0.2,
+            target_entropy_weight=0.2,
+            target_entropy=0.0,
             loss_function="l2"
         )
 
