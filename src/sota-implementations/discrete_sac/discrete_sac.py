@@ -173,7 +173,7 @@ def main(cfg: "DictConfig"):  # noqa: F821
 
                 # Update priority
                 if prb:
-                    replay_buffer.update_priority(sampled_tensordict)
+                    replay_buffer.update_tensordict_priority(sampled_tensordict)
 
         training_time = time.time() - training_start
         episode_end = (

@@ -39,6 +39,12 @@ from torchrl.objectives import SoftUpdate
 from torchrl.objectives.sac import DiscreteSACLoss
 from torchrl.record import VideoRecorder
 
+import os
+import sys
+
+sys.path.append(os.path.join(os.path.dirname(__file__), "../../envs/"))
+from toy_env import ToyEnv
+
 
 # ====================================================================
 # Environment utils
@@ -59,6 +65,22 @@ def env_maker(cfg, device="cpu", from_pixels=False):
         return TransformedEnv(
             env, CatTensors(in_keys=env.observation_spec.keys(), out_key="observation")
         )
+    elif lib == "toy":
+        x, y = ToyEnv.calculate_xy(n_states=cfg.env.n_states, shortcut_steps=cfg.env.shortcut_steps, return_x=cfg.env.return_x, return_y=cfg.env.return_y, big_reward=cfg.env.big_reward, gamma=cfg.env.gamma)
+        env = ToyEnv(
+            left_reward=x,
+            right_reward=x,
+            down_reward=y,
+            up_reward=y,
+            n_states=cfg.env.n_states,
+            shortcut_steps=cfg.env.shortcut_steps,
+            big_reward=cfg.env.big_reward,
+            constraints_active=True,
+            random_start=False,
+            seed=None,
+            device=device
+        )
+        return env
     else:
         raise NotImplementedError(f"Unknown lib {lib}.")
 

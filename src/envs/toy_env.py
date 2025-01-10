@@ -46,17 +46,17 @@ class ToyEnv(EnvBase):
 
     def _make_spec(self):
         self.observation_spec = Composite(
-            state=OneHot(self.n_states, shape=(self.n_states,), dtype=torch.float32),
+            observation=OneHot(self.n_states, shape=(self.n_states,), dtype=torch.float32),
             normal_reward=UnboundedContinuous(shape=(1), dtype=torch.float32),
             constraint_reward=UnboundedContinuous(shape=(1), dtype=torch.float32),
             shape=(),
         )
         self.state_spec = Composite(
-            state=OneHot(self.n_states, shape=(self.n_states,), dtype=torch.float32),
+            observation=OneHot(self.n_states, shape=(self.n_states,), dtype=torch.float32),
             shape=(),
         )
 
-        self.action_spec = OneHot(4, shape=(4,), dtype=torch.float32)
+        self.action_spec = OneHot(4, shape=(4,), dtype=torch.int64)
         # The sum of normal_reward and constraint_reward
         self.reward_spec = UnboundedContinuous(shape=(1,), dtype=torch.float32)
 
@@ -82,7 +82,7 @@ class ToyEnv(EnvBase):
 
         out = TensorDict(
             {
-                "state": state,
+                "observation": state,
                 "normal_reward": torch.zeros(
                     shape, dtype=torch.float32, device=self.device
                 ).unsqueeze(-1),
@@ -99,7 +99,7 @@ class ToyEnv(EnvBase):
         self.rng = rng
 
     def _step(self, td):
-        state = td["state"]
+        state = td["observation"]
         action = td["action"]  # Action order: left, right, down, up
         state = torch.argmax(state, dim=-1)
         action = torch.argmax(action, dim=-1)
@@ -179,7 +179,7 @@ class ToyEnv(EnvBase):
 
         out = TensorDict(
             {
-                "state": next_state,
+                "observation": next_state,
                 "reward": reward,
                 "normal_reward": normal_reward.unsqueeze(-1),
                 "constraint_reward": constraint_reward.unsqueeze(-1),
