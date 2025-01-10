@@ -24,7 +24,7 @@ from torchrl.envs import (Compose, DMControlEnv, DoubleToFloat,
                           ObservationNorm, ParallelEnv, StepCounter,
                           TransformedEnv, set_gym_backend)
 from torchrl.envs.libs.gym import GymEnv
-from torchrl.envs.transforms import CatTensors, Transform, RenameTransform, DoubleToFloat
+from torchrl.envs.transforms import CatTensors, Transform, RenameTransform, DoubleToFloat, DTypeCastTransform
 from torchrl.envs.transforms.transforms import _apply_to_composite
 from torchrl.envs.utils import (ExplorationType, check_env_specs,
                                 set_exploration_type)
@@ -51,13 +51,12 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, shortc
     """
     env_max_steps = 5*n_states
     # env_max_steps = total_frames
-    big_reward = 1.0
+    big_reward = 10.0
     gamma = 0.99
-    actor_lr = 5e-3
-    critic_lr = 5e-3
-    alpha_lr = 5e-3
-    # lr = 1e-3
-    target_eps = 0.99
+    actor_lr = 3e-4
+    critic_lr = 3e-4
+    alpha_lr = 3e-4
+    target_eps = 0.995
     alpha = 0.7
     beta = 0.5
     max_grad_norm = 100.0
@@ -67,6 +66,7 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, shortc
 
     transforms = Compose(
         StepCounter(max_steps=env_max_steps),
+        DTypeCastTransform(dtype_in=torch.long, dtype_out=torch.float32, in_keys=["observation"])
     )
     x, y = ToyEnv.calculate_xy(n_states=n_states, shortcut_steps=shortcut_steps, return_x=return_x, return_y=return_y, big_reward=big_reward, gamma=gamma)
     env = ToyEnv(
@@ -176,7 +176,7 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, shortc
 
             if progress_bar:
                 pbar.update(td.numel())
-    except Exception as e:
+    except KeyboardInterrupt as e:
         print(f"Training interrupted due to an error: {e}")
         if progress_bar:
             pbar.close()

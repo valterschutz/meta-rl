@@ -28,6 +28,7 @@ from torchrl.objectives.value import GAE
 from torchrl.record import VideoRecorder
 from torchrl.record.loggers.csv import CSVLogger
 from torchrl.modules import OneHotCategorical, TruncatedNormal
+from torchrl.modules.tensordict_module import SafeModule
 from tqdm import tqdm
 from torchrl.objectives import ValueEstimators
 from torchrl.data import TensorDictReplayBuffer
@@ -46,6 +47,7 @@ from utils import calc_return
 class ToySACAgent:
     def __init__(self, action_spec, state_spec, device, buffer_size, min_buffer_size, batch_size, sub_batch_size, num_epochs, actor_lr, critic_lr, alpha_lr, gamma, target_eps, alpha, beta, max_grad_norm):
         self.action_spec = action_spec
+        # self.action_spec = action_spec[(0,) * batch_size]
         self.state_spec = state_spec
         self.device = device
         self.buffer_size = buffer_size
@@ -62,15 +64,15 @@ class ToySACAgent:
         self.beta = beta
         self.max_grad_norm = max_grad_norm
 
-        n_states = self.state_spec["state"].shape[-1]
+        n_states = self.state_spec["observation"].shape[-1]
         n_actions = self.action_spec.shape[-1]
 
         actor_net = nn.Sequential(
             nn.Linear(n_states, n_actions, device=device),
         )
 
-        policy_module = TensorDictModule(
-            actor_net, in_keys=["state"], out_keys=["logits"]
+        policy_module = SafeModule(
+            module=actor_net, in_keys=["observation"], out_keys=["logits"], spec=self.action_spec
         )
 
         self.policy_module = ProbabilisticActor(
@@ -78,7 +80,7 @@ class ToySACAgent:
             spec=self.action_spec,
             in_keys=["logits"],
             distribution_class=OneHotCategorical,
-            default_interaction_type=InteractionType.RANDOM, # TODO: should this be random?
+            default_interaction_type=InteractionType.RANDOM,
             return_log_prob=True,
         )
 
@@ -87,7 +89,7 @@ class ToySACAgent:
         )
         self.qvalue_module = ValueOperator(
             module=qvalue_net,
-            in_keys=["state"],
+            in_keys=["observation"],
             out_keys=["action_value"],
         )
 
@@ -95,16 +97,14 @@ class ToySACAgent:
             actor_network=self.policy_module,
             qvalue_network=self.qvalue_module,
             num_actions=n_actions,
-            # delay_qvalue=True,
-            # num_qvalue_nets=2,
-            # alpha_init=0.9,
-            # min_alpha=0.1,
-            # max_alpha=1,
-            target_entropy=0.0,
-            # alpha_init=0.1,
+            delay_qvalue=True,
+            num_qvalue_nets=2,
+            target_entropy=0.2,
+            loss_function="l2"
         )
 
-        self.loss_module.make_value_estimator(ValueEstimators.TD0, gamma=self.gamma)
+        # self.loss_module.make_value_estimator(ValueEstimators.TD0, gamma=self.gamma)
+        self.loss_module.make_value_estimator(gamma=self.gamma)
         # self.loss_module.make_value_estimator(gamma=self.gamma)
         self.loss_keys = ["loss_actor", "loss_qvalue", "loss_alpha"]
 
@@ -144,7 +144,6 @@ class ToySACAgent:
         alphas = []
         entropy = []
         for _ in range(self.num_epochs):
-
             subdata = self.replay_buffer.sample(self.sub_batch_size)
             # Interpret rewards differently depending on the batch
             if constraints_active:
@@ -223,7 +222,6 @@ class ToyDDPGAgent:
         class QValueNet(nn.Module):
             def __init__(self):
                 super().__init__()
-                hidden
                 self.net = nn.Sequential(
                     nn.Linear(n_states+n_actions, hidden_units, device=device),
                     nn.Linear(hidden_units, 1, device=device),

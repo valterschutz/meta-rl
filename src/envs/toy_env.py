@@ -20,6 +20,7 @@ class ToyEnv(EnvBase):
         n_states,
         shortcut_steps,
         big_reward,
+        punishment,
         constraints_active,
         random_start=False,
         seed=None,
@@ -35,6 +36,7 @@ class ToyEnv(EnvBase):
         self.n_states = n_states
         self.shortcut_steps = shortcut_steps
         self.big_reward = big_reward
+        self.punishment = punishment
         self.random_start = random_start
 
         self.constraints_active = constraints_active
@@ -46,17 +48,17 @@ class ToyEnv(EnvBase):
 
     def _make_spec(self):
         self.observation_spec = Composite(
-            observation=OneHot(self.n_states, shape=(self.n_states,), dtype=torch.float32),
+            observation=OneHot(self.n_states, shape=(self.n_states,), dtype=torch.long),
             normal_reward=UnboundedContinuous(shape=(1), dtype=torch.float32),
             constraint_reward=UnboundedContinuous(shape=(1), dtype=torch.float32),
             shape=(),
         )
         self.state_spec = Composite(
-            observation=OneHot(self.n_states, shape=(self.n_states,), dtype=torch.float32),
+            observation=OneHot(self.n_states, shape=(self.n_states,), dtype=torch.long),
             shape=(),
         )
 
-        self.action_spec = OneHot(4, shape=(4,), dtype=torch.int64)
+        self.action_spec = OneHot(4, shape=(4,), dtype=torch.long)
         # The sum of normal_reward and constraint_reward
         self.reward_spec = UnboundedContinuous(shape=(1,), dtype=torch.float32)
 
@@ -75,7 +77,6 @@ class ToyEnv(EnvBase):
 
         state = (
             F.one_hot(state_indices, num_classes=self.n_states)
-            .to(torch.float32)
             .to(self.device)
         )
         # print(f"{state=}")
@@ -106,7 +107,7 @@ class ToyEnv(EnvBase):
 
         next_state = state.clone()
 
-        normal_reward = 0 * torch.ones_like(
+        normal_reward = self.punishment * torch.ones_like(
             state, dtype=torch.float32, device=self.device
         )
         constraint_reward = 0 * torch.ones_like(
@@ -166,7 +167,6 @@ class ToyEnv(EnvBase):
 
         next_state = (
             F.one_hot(next_state, num_classes=self.n_states)
-            .to(torch.float32)
             .to(self.device)
         )
 
@@ -190,46 +190,46 @@ class ToyEnv(EnvBase):
         return out
 
     @staticmethod
-    def calculate_xy(n_states, shortcut_steps, return_x, return_y, big_reward, gamma):
+    def calculate_xy(n_states, shortcut_steps, return_x, return_y, big_reward, punishment, gamma):
         # Assuming n_pos is even, calculate x and y
         assert (n_states-2) % shortcut_steps == 0, "n_states must be 2 more than a multiple of shortcut_steps"
         nx = n_states - 2 # Number of times we need to step 'right' to reach the end, excluding the final state
         ny = (n_states - 2) // shortcut_steps # Number of times we need to step 'up' to reach the end, excluding the final state
-        x = (return_x - big_reward * gamma**nx) / sum(gamma**k for k in range(0, nx))
-        y = (return_y - big_reward * gamma**ny) / sum(gamma**k for k in range(0, ny))
+        x = (return_x - big_reward * gamma**nx) / sum(gamma**k for k in range(0, nx)) - punishment
+        y = (return_y - big_reward * gamma**ny) / sum(gamma**k for k in range(0, ny)) - punishment
         return x, y
 
 
-def get_toy_env(env_config, gamma):
-    x, y = ToyEnv.calculate_xy(
-        env_config["n_states"],
-        env_config["shortcut_steps"],
-        env_config["return_x"],
-        env_config["return_y"],
-        env_config["big_reward"],
-        gamma,
-    )
-    env = ToyEnv(
-        left_reward=x,
-        right_reward=x,
-        down_reward=y,
-        up_reward=y,
-        n_states=env_config["n_states"],
-        shortcut_steps=env_config["shortcut_steps"],
-        big_reward=env_config["big_reward"],
-        random_start=False,
-        constraints_active=env_config["constraints_active"],
-        seed=None,
-        device=env_config["device"],
-    ).to(env_config["device"])
+# def get_toy_env(env_config, gamma):
+#     x, y = ToyEnv.calculate_xy(
+#         env_config["n_states"],
+#         env_config["shortcut_steps"],
+#         env_config["return_x"],
+#         env_config["return_y"],
+#         env_config["big_reward"],
+#         gamma,
+#     )
+#     env = ToyEnv(
+#         left_reward=x,
+#         right_reward=x,
+#         down_reward=y,
+#         up_reward=y,
+#         n_states=env_config["n_states"],
+#         shortcut_steps=env_config["shortcut_steps"],
+#         big_reward=env_config["big_reward"],
+#         random_start=False,
+#         constraints_active=env_config["constraints_active"],
+#         seed=None,
+#         device=env_config["device"],
+#     ).to(env_config["device"])
 
 
-    env = TransformedEnv(
-        env,
-        Compose(
-            StepCounter(max_steps=env_config["max_steps"]),
-        )
-    )
-    check_env_specs(env)
+#     env = TransformedEnv(
+#         env,
+#         Compose(
+#             StepCounter(max_steps=env_config["max_steps"]),
+#         )
+#     )
+#     check_env_specs(env)
 
-    return env
+#     return env

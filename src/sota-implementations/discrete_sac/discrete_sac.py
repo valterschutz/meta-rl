@@ -31,7 +31,10 @@ from utils import (
     make_optimizer,
     make_replay_buffer,
     make_sac_agent,
+    calc_return
 )
+
+import wandb
 
 
 @hydra.main(version_base="1.1", config_path="", config_name="config")
@@ -70,7 +73,7 @@ def main(cfg: "DictConfig"):  # noqa: F821
     # Create agent
     model = make_sac_agent(cfg, train_env, eval_env, device)
 
-    # Create TD3 loss
+    # Create SAC loss
     loss_module, target_net_updater = make_loss_module(cfg, model)
 
     # Create off-policy collector
@@ -98,7 +101,6 @@ def main(cfg: "DictConfig"):  # noqa: F821
     init_random_frames = cfg.collector.init_random_frames
     num_updates = int(
         cfg.collector.env_per_collector
-        * cfg.collector.frames_per_batch
         * cfg.optim.utd_ratio
     )
     prb = cfg.replay_buffer.prb
@@ -108,6 +110,7 @@ def main(cfg: "DictConfig"):  # noqa: F821
 
     sampling_start = time.time()
     for i, tensordict in enumerate(collector):
+
         sampling_time = time.time() - sampling_start
 
         # Update weights of the inference policy
@@ -120,6 +123,7 @@ def main(cfg: "DictConfig"):  # noqa: F821
         # Add to replay buffer
         replay_buffer.extend(tensordict.cpu())
         collected_frames += current_frames
+        training_progress = collected_frames / cfg.collector.total_frames
 
         # Optimization steps
         training_start = time.time()
@@ -138,6 +142,12 @@ def main(cfg: "DictConfig"):  # noqa: F821
                     )
                 else:
                     sampled_tensordict = sampled_tensordict.clone()
+
+                # Depending on training progress, either train on constraints or not
+                if training_progress > cfg.replay_buffer.activate_constraints:
+                    sampled_tensordict["next", "reward"] = sampled_tensordict["next", "normal_reward"] + sampled_tensordict["next", "constraint_reward"]
+                else:
+                    sampled_tensordict["next", "reward"] = sampled_tensordict["next", "normal_reward"]
 
                 # Compute loss
                 loss_out = loss_module(sampled_tensordict)
@@ -198,6 +208,8 @@ def main(cfg: "DictConfig"):  # noqa: F821
             metrics_to_log["train/alpha_loss"] = np.mean(alpha_losses)
             metrics_to_log["train/sampling_time"] = sampling_time
             metrics_to_log["train/training_time"] = training_time
+            metrics_to_log["train/state_distribution"] = wandb.Histogram(tensordict["next", "observation"].argmax(dim=-1))
+            metrics_to_log["train/action_distribution"] = wandb.Histogram(tensordict["action"].argmax(dim=-1))
 
         # Evaluation
         prev_test_frame = ((i - 1) * frames_per_batch) // eval_iter
@@ -214,9 +226,9 @@ def main(cfg: "DictConfig"):  # noqa: F821
                 )
                 eval_env.apply(dump_video)
                 eval_time = time.time() - eval_start
-                eval_reward = eval_rollout["next", "reward"].sum(-2).mean().item()
-                metrics_to_log["eval/reward"] = eval_reward
+                metrics_to_log["eval/true return"] = calc_return((eval_rollout["next", "normal_reward"] + eval_rollout["next", "constraint_reward"]).flatten(), gamma=cfg.optim.gamma)
                 metrics_to_log["eval/time"] = eval_time
+                metrics_to_log["eval/step count"] = eval_rollout.size(1)
         if logger is not None:
             log_metrics(logger, metrics_to_log, collected_frames)
         sampling_start = time.time()

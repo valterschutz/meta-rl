@@ -29,6 +29,8 @@ from torchrl.envs import (
     StepCounter,
     TransformedEnv,
 )
+
+from torchrl.envs.transforms import DTypeCastTransform
 from torchrl.envs.libs.gym import GymEnv, set_gym_backend
 from torchrl.envs.utils import ExplorationType, set_exploration_type
 from torchrl.modules import MLP, SafeModule
@@ -66,7 +68,7 @@ def env_maker(cfg, device="cpu", from_pixels=False):
             env, CatTensors(in_keys=env.observation_spec.keys(), out_key="observation")
         )
     elif lib == "toy":
-        x, y = ToyEnv.calculate_xy(n_states=cfg.env.n_states, shortcut_steps=cfg.env.shortcut_steps, return_x=cfg.env.return_x, return_y=cfg.env.return_y, big_reward=cfg.env.big_reward, gamma=cfg.env.gamma)
+        x, y = ToyEnv.calculate_xy(n_states=cfg.env.n_states, shortcut_steps=cfg.env.shortcut_steps, return_x=cfg.env.return_x, return_y=cfg.env.return_y, big_reward=cfg.env.big_reward, punishment=cfg.env.punishment, gamma=cfg.optim.gamma)
         env = ToyEnv(
             left_reward=x,
             right_reward=x,
@@ -75,10 +77,14 @@ def env_maker(cfg, device="cpu", from_pixels=False):
             n_states=cfg.env.n_states,
             shortcut_steps=cfg.env.shortcut_steps,
             big_reward=cfg.env.big_reward,
-            constraints_active=True,
+            punishment=cfg.env.punishment,
+            constraints_active=False,
             random_start=False,
             seed=None,
             device=device
+        )
+        env = TransformedEnv(
+            env, DTypeCastTransform(dtype_in=torch.long, dtype_out=torch.float32, in_keys=["observation"])
         )
         return env
     else:
@@ -276,6 +282,7 @@ def make_loss_module(cfg, model):
         actor_network=model[0],
         qvalue_network=model[1],
         num_actions=model[0].spec["action"].space.n,
+        action_space="one-hot",
         num_qvalue_nets=2,
         loss_function=cfg.optim.loss_function,
         target_entropy_weight=cfg.optim.target_entropy_weight,
@@ -294,17 +301,17 @@ def make_optimizer(cfg, loss_module):
 
     optimizer_actor = optim.Adam(
         actor_params,
-        lr=cfg.optim.lr,
+        lr=cfg.optim.actor_lr,
         weight_decay=cfg.optim.weight_decay,
     )
     optimizer_critic = optim.Adam(
         critic_params,
-        lr=cfg.optim.lr,
+        lr=cfg.optim.critic_lr,
         weight_decay=cfg.optim.weight_decay,
     )
     optimizer_alpha = optim.Adam(
         [loss_module.log_alpha],
-        lr=3.0e-4,
+        lr=cfg.optim.alpha_lr,
     )
     return optimizer_actor, optimizer_critic, optimizer_alpha
 
@@ -333,3 +340,25 @@ def get_activation(cfg):
 def dump_video(module):
     if isinstance(module, VideoRecorder):
         module.dump()
+
+def calc_return(t, gamma, discount_start=0):
+    """
+    Calculate the return for a single rollout.
+
+    Args:
+        t (Tensor): 1-dimensional tensor of rewards.
+        gamma (float): Discount factor.
+        discount_start (int): Starting exponent for discounting (default: 0).
+
+    Returns:
+        float: The total discounted return.
+    """
+
+    if t.dim() != 1:
+        raise ValueError("Input tensor `t` must be 1-dimensional.")
+
+    # Compute discount factors
+    discounts = gamma ** (torch.arange(len(t), device=t.device) + discount_start)
+
+    # Calculate the discounted return
+    return (t * discounts).sum().item()
