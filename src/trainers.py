@@ -42,15 +42,14 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "./"))
 
 from envs.toy_env import ToyEnv
 from utils import calc_return
-from agents.base_agents import ToySACAgent, ToyDDPGAgent, PointBaseAgent, ReacherBaseAgent
+from agents.base_agents import ToySACAgent, PointSACAgent, ReacherSACAgent
 
 
-def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, big_reward, shortcut_steps, return_x, return_y, when_constraints_active, times_to_eval, log, progress_bar, batch_size, sub_batch_size, num_epochs, agent_alg):
+def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, big_reward, gamma, shortcut_steps, return_x, return_y, when_constraints_active, times_to_eval, log, progress_bar, batch_size, sub_batch_size, num_epochs, agent_alg):
     """
     Train a base agent in the toy environment.
     """
     env_max_steps = 5*n_states
-    gamma = 0.99
 
     n_batches = total_frames // batch_size
     eval_every_n_batch = n_batches // times_to_eval
@@ -82,6 +81,7 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, big_re
     if agent_alg == "SAC":
         agent = ToySACAgent(
             state_spec=env.state_spec,
+            n_states = n_states,
             action_spec=env.action_spec,
             device=device,
             buffer_size = total_frames,
@@ -91,18 +91,8 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, big_re
             num_epochs = num_epochs,
             gamma = gamma,
         )
-    elif agent_alg == "DDPG":
-        agent = ToyDDPGAgent(
-            state_spec=env.state_spec,
-            action_spec=env.action_spec,
-            device=device,
-            buffer_size = total_frames,
-            min_buffer_size = min_buffer_size,
-            batch_size = batch_size,
-            sub_batch_size = sub_batch_size,
-            num_epochs = num_epochs,
-            gamma = gamma,
-        )
+    else:
+        raise ValueError(f"Unknown agent algorithm {agent_alg}")
 
     rand_collector = SyncDataCollector(
         env,
@@ -154,10 +144,11 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, big_re
                     **loss_dict,
                     **info_dict,
                     "batch": i,
-                    "next state distribution": wandb.Histogram(td["next","observation"].argmax(dim=-1).cpu()+1),
+                    # "next state distribution": wandb.Histogram(td["next","observation"].argmax(dim=-1).cpu()+1),
+                    "next state distribution": wandb.Histogram(td["next","observation"].cpu()+1),
                     "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()+1),
-                    "policy 'norm'": sum((p**2).sum() for p in agent.policy_module.parameters()),
-                    "value 'norm'": sum((p**2).sum() for p in agent.qvalue_module.parameters()),
+                    "policy 'norm'": sum((p**2).sum() for p in agent.loss_module.actor_network_params.parameters()),
+                    "value 'norm'": sum((p**2).sum() for p in agent.loss_module.qvalue_network_params.parameters()),
                     "constraints_active": float(constraints_active)
                 })
             if i % eval_every_n_batch == 0:
@@ -229,7 +220,7 @@ def train_point_base_agent(device, total_frames, min_buffer_size, when_constrain
         transforms
     )
 
-    agent = PointBaseAgent(
+    agent = PointSACAgent(
         env.action_spec,
         device=device,
         buffer_size = total_frames,
@@ -374,7 +365,7 @@ def train_reacher_base_agent(device, total_frames, min_buffer_size, when_constra
         transforms
     )
 
-    agent = ReacherBaseAgent(
+    agent = ReacherSACAgent(
         env.action_spec,
         device=device,
         buffer_size = total_frames,

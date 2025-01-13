@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 from tensordict import TensorDict
-from torchrl.data import Composite, OneHot, UnboundedContinuous
+from torchrl.data import Composite, OneHot, UnboundedContinuous, UnboundedDiscrete
 from torchrl.envs import EnvBase
 from torchrl.envs.transforms import (Compose, RenameTransform, StepCounter,
                                      TransformedEnv)
@@ -9,7 +9,6 @@ from torchrl.envs.utils import check_env_specs
 
 
 class ToyEnv(EnvBase):
-    batch_locked = False
 
     def __init__(
         self,
@@ -48,13 +47,14 @@ class ToyEnv(EnvBase):
 
     def _make_spec(self):
         self.observation_spec = Composite(
-            observation=OneHot(self.n_states, shape=(self.n_states,), dtype=torch.long),
-            normal_reward=UnboundedContinuous(shape=(1), dtype=torch.float32),
-            constraint_reward=UnboundedContinuous(shape=(1), dtype=torch.float32),
+            # There does not seem to be a "BoundedDiscrete" class, so we use the unbounded one
+            observation=UnboundedDiscrete(shape=(1,), dtype=torch.long),
+            normal_reward=UnboundedContinuous(shape=(1,), dtype=torch.float32),
+            constraint_reward=UnboundedContinuous(shape=(1,), dtype=torch.float32),
             shape=(),
         )
         self.state_spec = Composite(
-            observation=OneHot(self.n_states, shape=(self.n_states,), dtype=torch.long),
+            observation=UnboundedDiscrete(shape=(1,), dtype=torch.long),
             shape=(),
         )
 
@@ -64,34 +64,35 @@ class ToyEnv(EnvBase):
 
     def _reset(self, td):
         if td is None or td.is_empty():
-            shape = ()
+            batch_shape = ()
         else:
-            shape = td.shape
+            batch_shape = td.shape
 
         if self.random_start:
             state_indices = torch.randint(
-                0, self.n_states, shape=shape, dtype=torch.long, device=self.device
+                0, self.n_states, shape=(*batch_shape, 1), dtype=torch.long, device=self.device
             )
         else:
-            state_indices = torch.zeros(shape, dtype=torch.long, device=self.device)
+            state_indices = torch.zeros((*batch_shape, 1), dtype=torch.long, device=self.device)
 
-        state = (
-            F.one_hot(state_indices, num_classes=self.n_states)
-            .to(self.device)
-        )
+        state = state_indices
+        # state = (
+        #     F.one_hot(state_indices, num_classes=self.n_states)
+        #     .to(self.device)
+        # )
         # print(f"{state=}")
 
         out = TensorDict(
             {
                 "observation": state,
                 "normal_reward": torch.zeros(
-                    shape, dtype=torch.float32, device=self.device
+                    batch_shape, dtype=torch.float32, device=self.device
                 ).unsqueeze(-1),
                 "constraint_reward": torch.zeros(
-                    shape, dtype=torch.float32, device=self.device
+                    batch_shape, dtype=torch.float32, device=self.device
                 ).unsqueeze(-1),
             },
-            batch_size=shape,
+            batch_size=batch_shape,
         )
         return out
 
@@ -102,7 +103,7 @@ class ToyEnv(EnvBase):
     def _step(self, td):
         state = td["observation"]
         action = td["action"]  # Action order: left, right, down, up
-        state = torch.argmax(state, dim=-1)
+        # state = torch.argmax(state, dim=-1)
         action = torch.argmax(action, dim=-1)
 
         next_state = state.clone()
@@ -165,10 +166,14 @@ class ToyEnv(EnvBase):
         # If we reach final pos, we're done
         done = torch.where(next_state == self.n_states - 1, 1.0, done).to(torch.bool)
 
-        next_state = (
-            F.one_hot(next_state, num_classes=self.n_states)
-            .to(self.device)
-        )
+        # next_state = (
+        #     F.one_hot(next_state, num_classes=self.n_states)
+        #     .to(self.device)
+        # )
+
+        # For some reason, rewards have to have one dimension less
+        normal_reward = normal_reward.squeeze(-1)
+        constraint_reward = constraint_reward.squeeze(-1)
 
 
         reward = (

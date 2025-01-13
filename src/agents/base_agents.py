@@ -26,7 +26,7 @@ from torchrl.envs.transforms import CatTensors
 from torchrl.envs.utils import (ExplorationType, check_env_specs,
                                 set_exploration_type)
 from torchrl.modules import (OneHotCategorical, ProbabilisticActor, TanhNormal,
-                             TruncatedNormal, ValueOperator)
+                             TruncatedNormal, ValueOperator, MLP)
 from torchrl.modules.tensordict_module import SafeModule
 from torchrl.objectives import (DDPGLoss, DiscreteSACLoss, SACLoss, SoftUpdate,
                                 ValueEstimators)
@@ -44,7 +44,7 @@ from utils import calc_return
 
 
 class ToySACAgent:
-    def __init__(self, action_spec, state_spec, device, buffer_size, min_buffer_size, batch_size, sub_batch_size, num_epochs, gamma):
+    def __init__(self, action_spec, state_spec, n_states, device, buffer_size, min_buffer_size, batch_size, sub_batch_size, num_epochs, gamma):
         self.action_spec = action_spec
         self.state_spec = state_spec
         self.device = device
@@ -64,12 +64,10 @@ class ToySACAgent:
         self.beta = 0.5
         self.max_grad_norm = 100
 
-        n_states = self.state_spec["observation"].shape[-1]
+
         n_actions = self.action_spec.shape[-1]
 
-        actor_net = nn.Sequential(
-            nn.Linear(n_states, n_actions, device=device),
-        )
+        actor_net = MLP(in_features=1, out_features=n_actions, depth=2, num_cells=n_states, activation_class=nn.ReLU, device=device)
 
         policy_module = SafeModule(
             module=actor_net, in_keys=["observation"], out_keys=["logits"], spec=self.action_spec
@@ -84,9 +82,8 @@ class ToySACAgent:
             return_log_prob=True,
         )
 
-        qvalue_net = nn.Sequential(
-            nn.Linear(n_states, n_actions, device=device),
-        )
+        qvalue_net = MLP(in_features=1, out_features=n_actions, depth=2, num_cells=n_states, activation_class=nn.ReLU, device=device)
+
         self.qvalue_module = ValueOperator(
             module=qvalue_net,
             in_keys=["observation"],
@@ -99,14 +96,12 @@ class ToySACAgent:
             num_actions=n_actions,
             delay_qvalue=True,
             num_qvalue_nets=2,
-            # target_entropy_weight=0.2,
-            target_entropy=0.0,
+            target_entropy_weight=0.2,
+            # target_entropy=0.0,
             loss_function="l2"
         )
 
-        # self.loss_module.make_value_estimator(ValueEstimators.TD0, gamma=self.gamma)
-        self.loss_module.make_value_estimator(gamma=self.gamma)
-        # self.loss_module.make_value_estimator(gamma=self.gamma)
+        self.loss_module.make_value_estimator(ValueEstimators.TD0, gamma=self.gamma)
         self.loss_keys = ["loss_actor", "loss_qvalue", "loss_alpha"]
 
         self.target_net = SoftUpdate(self.loss_module, eps=self.target_eps)
@@ -124,6 +119,7 @@ class ToySACAgent:
             [self.loss_module.log_alpha],
             lr=self.alpha_lr
             )
+            # "all": torch.optim.Adam(self.loss_module.parameters(), lr=self.actor_lr)
         }
 
         self.replay_buffer = TensorDictReplayBuffer(
@@ -180,7 +176,7 @@ class ToySACAgent:
 
         return loss_dict, info_dict
 
-class PointBaseAgent:
+class PointSACAgent:
     def __init__(self, action_spec, device, buffer_size, min_buffer_size, batch_size, sub_batch_size, num_epochs, lr, gamma, target_eps, alpha, beta, max_grad_norm):
         self.action_spec = action_spec
         self.device = device
@@ -299,7 +295,7 @@ class PointBaseAgent:
 
         return loss_dict, info_dict
 
-class ReacherBaseAgent:
+class ReacherSACAgent:
     def __init__(self, action_spec, device, buffer_size, min_buffer_size, batch_size, sub_batch_size, num_epochs, lr, gamma, target_eps, alpha, beta, max_grad_norm):
         self.action_spec = action_spec
         self.device = device
