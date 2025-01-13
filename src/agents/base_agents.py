@@ -322,7 +322,7 @@ class ReacherSACAgent:
         )
 
         policy_module = TensorDictModule(
-            actor_net, in_keys=["state"], out_keys=["loc", "scale"]
+            actor_net, in_keys=["observation"], out_keys=["loc", "scale"]
         )
 
         self.policy_module = ProbabilisticActor(
@@ -347,7 +347,7 @@ class ReacherSACAgent:
                 return self.net(torch.cat([state, action], -1))
         self.qvalue_module = ValueOperator(
             module=QValueNet(),
-            in_keys=["state", "action"],
+            in_keys=["observation", "action"],
             out_keys=["state_action_value"],
         )
 

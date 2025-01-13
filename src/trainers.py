@@ -41,6 +41,7 @@ import wandb
 sys.path.append(os.path.join(os.path.dirname(__file__), "./"))
 
 from envs.toy_env import ToyEnv
+from envs.dm_env import ConstraintDMControlEnv
 from utils import calc_return
 from agents.base_agents import ToySACAgent, PointSACAgent, ReacherSACAgent
 
@@ -331,35 +332,12 @@ def train_reacher_base_agent(device, total_frames, min_buffer_size, when_constra
     n_batches = total_frames // batch_size
     eval_every_n_batch = n_batches // times_to_eval
 
-    # Custom transform for adding constraints
-    class NegativeNormTransform(Transform):
-        def _apply_transform(self, t: torch.Tensor) -> None:
-            return -t.norm().unsqueeze(-1)
-
-        # The transform must also modify the data at reset time
-        def _reset(
-            self, tensordict: TensorDictBase, tensordict_reset: TensorDictBase
-        ) -> TensorDictBase:
-            return self._call(tensordict_reset)
-
-        @_apply_to_composite
-        def transform_observation_spec(self, observation_spec):
-            return BoundedTensorSpec(
-                low=-1,
-                high=1,
-                shape=observation_spec.shape,
-                dtype=observation_spec.dtype,
-                device=observation_spec.device,
-            )
-
     transforms = Compose(
         DoubleToFloat(),
         StepCounter(max_steps=env_max_steps),
-        CatTensors(in_keys=["position", "velocity"], out_key="state", del_keys=False),
-        RenameTransform(in_keys=["reward"], out_keys=["normal_reward"], create_copy=True),
-        NegativeNormTransform(in_keys=["velocity"], out_keys=["constraint_reward"]),
+        CatTensors(in_keys=["position", "velocity"], out_key="observation", del_keys=False),
     )
-    env = DMControlEnv("reacher", "easy")
+    env = ConstraintDMControlEnv("reacher", "easy", constraint_weight=1.0)
     env = TransformedEnv(
         env,
         transforms
