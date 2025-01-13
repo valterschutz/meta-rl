@@ -152,7 +152,7 @@ class ToyEnv(EnvBase):
         )
 
         # Ensure that we can never move before the start pos
-        next_state = torch.where(next_state < 0, 0, next_state)
+        next_state = torch.where(next_state < 0, -next_state, next_state)
 
         done = torch.zeros_like(state, dtype=torch.bool, device=self.device)
 

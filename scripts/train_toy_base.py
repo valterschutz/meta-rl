@@ -9,8 +9,7 @@ import wandb
 from trainers import train_toy_base_agent
 
 wandb.init(project="clean-base-sac")
-# n_states = 302
-n_states = 100 # min with constraints: 40 (no), 100 (no), 100 (jumps)
+n_states = 102
 gamma = 0.999
 return_x = 9
 return_y = 1
@@ -21,7 +20,7 @@ returns = train_toy_base_agent(
     n_states=n_states,
     big_reward = 10,
     gamma = gamma,
-    shortcut_steps=2,
+    shortcut_steps=4,
     return_x=return_x,
     return_y=return_y,
     when_constraints_active=0.01,
