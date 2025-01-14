@@ -46,6 +46,7 @@ from utils import calc_return
 from agents.base_agents import ToySACAgent, PointSACAgent, ReacherSACAgent
 
 
+# TODO: rewrite to use OffpolicyTrainer
 def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, big_reward, gamma, shortcut_steps, return_x, return_y, when_constraints_active, times_to_eval, log, progress_bar, batch_size, sub_batch_size, num_epochs, agent_alg):
     """
     Train a base agent in the toy environment.
@@ -172,273 +173,93 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, big_re
             pbar.close()
     return eval_returns
 
-def train_point_base_agent(device, total_frames, min_buffer_size, when_constraints_active, times_to_eval, log, progress_bar, batch_size, sub_batch_size, num_epochs):
-    """
-    Train a base agent in the Point environment.
-    """
-    env_max_steps = total_frames
-    gamma = 0.99
-    lr = 5e-3
-    target_eps = 0.99
-    alpha = 0.7
-    beta = 0.5
-    max_grad_norm = 100.0
 
-    n_batches = total_frames // batch_size
-    eval_every_n_batch = n_batches // times_to_eval
+class OffpolicyTrainer():
+    def __init__(self, env, agent, progress_bar, times_to_eval, collector_device, log, max_eval_steps, collector_args, env_gamma, pixel_env=None):
+        self.env = env
+        self.agent = agent
+        self.total_frames = collector_args["total_frames"]
+        self.n_batches = self.total_frames // collector_args["batch_size"]
+        self.eval_every_n_batch = self.n_batches // times_to_eval
+        self.log = log
+        self.max_eval_steps = max_eval_steps
+        self.progress_bar = progress_bar
+        self.env_gamma = env_gamma
 
-    # Custom transform for adding constraints
-    class NegativeNormTransform(Transform):
-        def _apply_transform(self, t: torch.Tensor) -> None:
-            return -t.norm().unsqueeze(-1)
+        self.rand_collector = SyncDataCollector(
+            env,
+            None,
+            frames_per_batch=collector_args["batch_size"],
+            total_frames=agent.min_buffer_size,
+            split_trajs=False,
+            device=collector_device,
+        )
 
-        # The transform must also modify the data at reset time
-        def _reset(
-            self, tensordict: TensorDictBase, tensordict_reset: TensorDictBase
-        ) -> TensorDictBase:
-            return self._call(tensordict_reset)
+        self.collector = SyncDataCollector(
+            env,
+            agent.policy,
+            frames_per_batch=collector_args["batch_size"],
+            total_frames=self.total_frames-agent.min_buffer_size,
+            split_trajs=False,
+            device=collector_device,
+        )
 
-        @_apply_to_composite
-        def transform_observation_spec(self, observation_spec):
-            return BoundedTensorSpec(
-                low=-1,
-                high=1,
-                shape=observation_spec.shape,
-                dtype=observation_spec.dtype,
-                device=observation_spec.device,
-            )
-
-    transforms = Compose(
-        DoubleToFloat(),
-        StepCounter(max_steps=env_max_steps),
-        CatTensors(in_keys=["position", "velocity"], out_key="state", del_keys=False),
-        RenameTransform(in_keys=["reward"], out_keys=["normal_reward"], create_copy=True),
-        NegativeNormTransform(in_keys=["velocity"], out_keys=["constraint_reward"]),
-    )
-    env = DMControlEnv("point_mass", "easy")
-    env = TransformedEnv(
-        env,
-        transforms
-    )
-
-    agent = PointSACAgent(
-        env.action_spec,
-        device=device,
-        buffer_size = total_frames,
-        min_buffer_size = min_buffer_size,
-        batch_size = batch_size,
-        sub_batch_size = sub_batch_size,
-        num_epochs = num_epochs,
-        lr = lr,
-        gamma = gamma,
-        target_eps = target_eps,
-        alpha=alpha,
-        beta=beta,
-        max_grad_norm = max_grad_norm
-    )
-
-    rand_collector = SyncDataCollector(
-        env,
-        None,
-        frames_per_batch=agent.batch_size,
-        total_frames=agent.min_buffer_size,
-        split_trajs=False,
-        device=device,
-    )
-
-    collector = SyncDataCollector(
-        env,
-        agent.policy_module,
-        frames_per_batch=agent.batch_size,
-        total_frames=total_frames-agent.min_buffer_size,
-        split_trajs=False,
-        device=device,
-    )
-
-    if progress_bar:
-        pbar = tqdm(total=total_frames)
-    if isinstance(when_constraints_active, float):
-        batch_to_activate_constraints = int(n_batches * when_constraints_active)
-    for td in rand_collector:
-        agent.process_batch(td, constraints_active=False)
-        if progress_bar:
-            pbar.update(td.numel())
-
-    eval_returns = []
-    try:
-        for i, td in enumerate(collector):
-            td["action"] = td["action"].to(torch.float32) # Due to bug in torchrl, need to manually cast to float
-            collector.update_policy_weights_()
-
-            # Constraints are either deterministically set at some batch or decided by a callback function
-            if isinstance(when_constraints_active, float):
-                constraints_active: bool = i >= batch_to_activate_constraints
-            elif callable(when_constraints_active):
-                constraints_active: bool = when_constraints_active(td)
-
-            loss_dict, info_dict = agent.process_batch(td, constraints_active=constraints_active)
-
-            if log:
-                wandb.log({
-                    "normal_reward": td["next", "normal_reward"].mean().item(),
-                    "constraint_reward": td["next", "constraint_reward"].mean().item(),
-                    "reward": (td["next", "normal_reward"] + td["next", "constraint_reward"]).mean().item(),
-                    "max step count": td["step_count"].max().item(),
-                    **loss_dict,
-                    **info_dict,
-                    "batch": i,
-                    "pos x distribution": wandb.Histogram(td["position"][0].cpu()),
-                    "pos y distribution": wandb.Histogram(td["position"][1].cpu()),
-                    "vel x distribution": wandb.Histogram(td["velocity"][0].cpu()),
-                    "vel y distribution": wandb.Histogram(td["velocity"][1].cpu()),
-                    "x action": wandb.Histogram(td["action"][0].cpu()),
-                    "y action": wandb.Histogram(td["action"][1].cpu()),
-                    "policy 'norm'": sum((p**2).sum() for p in agent.policy_module.parameters()),
-                    "constraints_active": float(constraints_active)
-                })
-            if i % eval_every_n_batch == 0:
-                with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
-                    eval_data = env.rollout(10_000, agent.policy_module)
-                # Always use constrained return for evaluation
-                eval_return = calc_return((eval_data["next", "normal_reward"]+eval_data["next","constraint_reward"]).flatten(), gamma)
-                if log:
-                    wandb.log({
-                        "eval return": eval_return,
-                        "batch": i
-                    })
-                eval_returns.append(eval_return)
-
-            if progress_bar:
+    def train(self, when_constraints_active):
+        if self.progress_bar:
+            pbar = tqdm(total=self.total_frames)
+        if isinstance(when_constraints_active, float):
+            batch_to_activate_constraints = int(self.n_batches * when_constraints_active)
+        for td in self.rand_collector:
+            self.agent.process_batch(td, constraints_active=False)
+            if self.progress_bar:
                 pbar.update(td.numel())
-    except KeyboardInterrupt as e:
-        print(f"Training interrupted due to an error: {e}")
-        # print(f"{td["next", "reward"].shape=} {td["done"].shape=}, {}")
-        if progress_bar:
-            pbar.close()
-    return eval_returns
 
-def train_reacher_base_agent(device, total_frames, min_buffer_size, when_constraints_active, times_to_eval, log, progress_bar, batch_size, sub_batch_size, num_epochs):
-    """
-    Train a base agent in the Point environment.
-    """
-    env_max_steps = total_frames
-    gamma = 0.99
-    lr = 5e-3
-    target_eps = 0.99
-    alpha = 0.7
-    beta = 0.5
-    max_grad_norm = 100.0
+        eval_true_returns = []
+        try:
+            for i, td in enumerate(self.collector):
+                td["action"] = td["action"].to(torch.float32) # Due to bug in torchrl, need to manually cast to float
+                self.collector.update_policy_weights_()
 
-    n_batches = total_frames // batch_size
-    eval_every_n_batch = n_batches // times_to_eval
+                # Constraints are either deterministically set at some batch or decided by a callback function
+                if isinstance(when_constraints_active, float):
+                    constraints_active: bool = i >= batch_to_activate_constraints
+                elif callable(when_constraints_active):
+                    constraints_active: bool = when_constraints_active(td)
 
-    transforms = Compose(
-        DoubleToFloat(),
-        StepCounter(max_steps=env_max_steps),
-        CatTensors(in_keys=["position", "velocity"], out_key="observation", del_keys=False),
-    )
-    env = ConstraintDMControlEnv("reacher", "easy", constraint_weight=1.0)
-    env = TransformedEnv(
-        env,
-        transforms
-    )
+                loss_dict, info_dict = self.agent.process_batch(td, constraints_active=constraints_active)
 
-    agent = ReacherSACAgent(
-        env.action_spec,
-        device=device,
-        buffer_size = total_frames,
-        min_buffer_size = min_buffer_size,
-        batch_size = batch_size,
-        sub_batch_size = sub_batch_size,
-        num_epochs = num_epochs,
-        lr = lr,
-        gamma = gamma,
-        target_eps = target_eps,
-        alpha=alpha,
-        beta=beta,
-        max_grad_norm = max_grad_norm
-    )
-
-    rand_collector = SyncDataCollector(
-        env,
-        None,
-        frames_per_batch=agent.batch_size,
-        total_frames=agent.min_buffer_size,
-        split_trajs=False,
-        device=device,
-    )
-
-    collector = SyncDataCollector(
-        env,
-        agent.policy_module,
-        frames_per_batch=agent.batch_size,
-        total_frames=total_frames-agent.min_buffer_size,
-        split_trajs=False,
-        device=device,
-    )
-
-    if progress_bar:
-        pbar = tqdm(total=total_frames)
-    if isinstance(when_constraints_active, float):
-        batch_to_activate_constraints = int(n_batches * when_constraints_active)
-    for td in rand_collector:
-        agent.process_batch(td, constraints_active=False)
-        if progress_bar:
-            pbar.update(td.numel())
-
-    eval_returns = []
-    try:
-        for i, td in enumerate(collector):
-            td["action"] = td["action"].to(torch.float32) # Due to bug in torchrl, need to manually cast to float
-            collector.update_policy_weights_()
-
-            # Constraints are either deterministically set at some batch or decided by a callback function
-            if isinstance(when_constraints_active, float):
-                constraints_active: bool = i >= batch_to_activate_constraints
-            elif callable(when_constraints_active):
-                constraints_active: bool = when_constraints_active(td)
-
-            loss_dict, info_dict = agent.process_batch(td, constraints_active=constraints_active)
-
-            if log:
-                wandb.log({
-                    "normal_reward": td["next", "normal_reward"].mean().item(),
-                    "constraint_reward": td["next", "constraint_reward"].mean().item(),
-                    "reward": (td["next", "normal_reward"] + td["next", "constraint_reward"]).mean().item(),
-                    "max step count": td["step_count"].max().item(),
-                    **loss_dict,
-                    **info_dict,
-                    "batch": i,
-                    "pos x distribution": wandb.Histogram(td["position"][0].cpu()),
-                    "pos y distribution": wandb.Histogram(td["position"][1].cpu()),
-                    "vel x distribution": wandb.Histogram(td["velocity"][0].cpu()),
-                    "vel y distribution": wandb.Histogram(td["velocity"][1].cpu()),
-                    "x action": wandb.Histogram(td["action"][0].cpu()),
-                    "y action": wandb.Histogram(td["action"][1].cpu()),
-                    "policy 'norm'": sum((p**2).sum() for p in agent.policy_module.parameters()),
-                    "constraints_active": float(constraints_active)
-                })
-            if i % eval_every_n_batch == 0:
-                with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
-                    eval_data = env.rollout(10_000, agent.policy_module)
-                # Always use constrained return for evaluation
-                eval_return = calc_return((eval_data["next", "normal_reward"]+eval_data["next","constraint_reward"]).flatten(), gamma)
-                if log:
+                if self.log:
                     wandb.log({
-                        "eval return": eval_return,
-                        "batch": i
+                        "normal_reward": td["next", "normal_reward"].mean().item(),
+                        "constraint_reward": td["next", "constraint_reward"].mean().item(),
+                        "true_reward": (td["next", "normal_reward"] + td["next", "constraint_reward"]).mean().item(),
+                        "batch": i,
+                        **loss_dict,
+                        **info_dict,
                     })
-                eval_returns.append(eval_return)
+                if i % self.eval_every_n_batch == 0:
+                    with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
+                        eval_data = self.env.rollout(self.max_eval_steps, self.agent.policy)
+                    # Always use constrained return for evaluation
+                    eval_normal_return = calc_return((eval_data["next", "normal_reward"]).flatten(), self.env_gamma)
+                    eval_true_return = calc_return((eval_data["next", "normal_reward"]+eval_data["next","constraint_reward"]).flatten(), self.env_gamma)
+                    if self.log:
+                        wandb.log({
+                            "eval normal return": eval_normal_return,
+                            "eval true return": eval_true_return,
+                            "batch": i
+                        })
+                    eval_true_returns.append(eval_true_return)
 
-            if progress_bar:
-                pbar.update(td.numel())
-    except KeyboardInterrupt as e:
-        print(f"Training interrupted due to an error: {e}")
-        # print(f"{td["next", "reward"].shape=} {td["done"].shape=}, {}")
-        if progress_bar:
-            pbar.close()
-    return eval_returns
+                if self.progress_bar:
+                    pbar.update(td.numel())
+        except KeyboardInterrupt as e:
+            print(f"Training interrupted.")
+            if self.progress_bar:
+                pbar.close()
+        return eval_true_returns
 
+# TODO: not finished
 def train_meta_agent(
     device,
     n_base_episodes,

@@ -27,13 +27,15 @@ from torchrl.envs.utils import (ExplorationType, check_env_specs,
                                 set_exploration_type)
 from torchrl.modules import (OneHotCategorical, ProbabilisticActor, TanhNormal,
                              TruncatedNormal, ValueOperator, MLP)
-from torchrl.modules.tensordict_module import SafeModule
+from torchrl.modules.tensordict_module import SafeModule, Actor
 from torchrl.objectives import (DDPGLoss, DiscreteSACLoss, SACLoss, SoftUpdate,
                                 ValueEstimators)
 from torchrl.objectives.value import GAE
 from torchrl.record import VideoRecorder
 from torchrl.record.loggers.csv import CSVLogger
 from tqdm import tqdm
+
+from abc import ABC, abstractmethod
 
 import wandb
 
@@ -295,84 +297,53 @@ class PointSACAgent:
 
         return loss_dict, info_dict
 
-class ReacherSACAgent:
-    def __init__(self, action_spec, device, buffer_size, min_buffer_size, batch_size, sub_batch_size, num_epochs, lr, gamma, target_eps, alpha, beta, max_grad_norm):
-        self.action_spec = action_spec
+
+    # def __init__(self, *args):
+    #     super().__init__(*args)
+
+
+
+
+class OffpolicyAgent(ABC):
+    @abstractmethod
+    def get_agent_details(self, agent_detail_args):
+        """
+        Should return a loss module, a list of loss keys, and a list of optimizers.
+        """
+        pass
+
+    @abstractmethod
+    def update_callback(self):
+        """
+        Called after each optimization step in `process_batch`
+        """
+        pass
+
+    @abstractmethod
+    def info_dict_callback(self, td, loss_module):
+        """
+        Called once at the end of `process_batch`. Should return a dictionary of information to pass to `wandb.log`.
+        """
+        pass
+
+
+    def __init__(self, device, batch_size, sub_batch_size, num_epochs, replay_buffer_args, max_grad_norm, env, agent_detail_args):
         self.device = device
-        self.buffer_size = buffer_size
-        self.min_buffer_size = min_buffer_size
-        self.batch_size = batch_size
         self.sub_batch_size = sub_batch_size
         self.num_epochs = num_epochs
-        self.lr = lr
-        self.gamma = gamma
-        self.target_eps = target_eps
-        self.alpha = alpha
-        self.beta = beta
         self.max_grad_norm = max_grad_norm
+        self.env = env
 
-        n_states = 4
-        n_actions = 2
-        hidden_units = 8
-        actor_net = nn.Sequential(
-            nn.Linear(n_states, hidden_units, device=device),
-            nn.ReLU(),
-            nn.Linear(hidden_units, 2*n_actions, device=device),
-            NormalParamExtractor()
-        )
-
-        policy_module = TensorDictModule(
-            actor_net, in_keys=["observation"], out_keys=["loc", "scale"]
-        )
-
-        self.policy_module = ProbabilisticActor(
-            module=policy_module,
-            spec=self.action_spec,
-            in_keys=["loc", "scale"],
-            distribution_class=TruncatedNormal,
-            default_interaction_type=InteractionType.RANDOM,
-            return_log_prob=True,
-        )
-
-        class QValueNet(nn.Module):
-            def __init__(self):
-                super().__init__()
-                self.net = nn.Sequential(
-                    nn.Linear(n_states+n_actions, hidden_units, device=device),
-                    nn.ReLU(),
-                    nn.Linear(hidden_units, 1, device=device),
-                )
-
-            def forward(self, state, action):
-                return self.net(torch.cat([state, action], -1))
-        self.qvalue_module = ValueOperator(
-            module=QValueNet(),
-            in_keys=["observation", "action"],
-            out_keys=["state_action_value"],
-        )
-
-        self.loss_module = SACLoss(
-            actor_network=self.policy_module,
-            qvalue_network=self.qvalue_module,
-            # alpha_init=1e-3,
-            # max_alpha=1e-3,
-            # target_entropy=0.0,
-            # alpha_init=0.1,
-        )
-
-        self.loss_module.make_value_estimator(ValueEstimators.TD0, gamma=self.gamma)
-        self.loss_keys = ["loss_actor", "loss_qvalue", "loss_alpha"]
-
-        self.target_net = SoftUpdate(self.loss_module, eps=self.target_eps)
-
-        self.optim = torch.optim.Adam(self.loss_module.parameters(), self.lr)
+        # Subclasses implement this (template method pattern)
+        self.loss_module, self.loss_keys, self.optims, self.policy = self.get_agent_details(agent_detail_args)
 
         self.replay_buffer = TensorDictReplayBuffer(
-            storage=LazyTensorStorage(max_size=self.buffer_size, device=self.device),
-            sampler=PrioritizedSampler(max_capacity=self.buffer_size, alpha=self.alpha, beta=self.beta),
+            storage=LazyTensorStorage(max_size=replay_buffer_args["buffer_size"], device=self.device),
+            sampler=PrioritizedSampler(max_capacity=replay_buffer_args["buffer_size"], alpha=replay_buffer_args["alpha"], beta=replay_buffer_args["beta"]),
             priority_key="td_error",
-            batch_size=self.batch_size,
+            batch_size=batch_size,
         )
+        self.min_buffer_size = replay_buffer_args["min_buffer_size"]
 
 
     def process_batch(self, td, constraints_active):
@@ -400,19 +371,193 @@ class ReacherSACAgent:
             loss.backward()
             grad = torch.nn.utils.clip_grad_norm_(self.loss_module.parameters(), self.max_grad_norm)
             grads.append(grad)
-            self.optim.step()
-            self.optim.zero_grad()
 
-            # Update target network
-            self.target_net.step()
+            for optim in self.optims:
+                optim.step()
+                optim.zero_grad()
+
+            self.update_callback()
             self.replay_buffer.update_tensordict_priority(subdata)
 
         loss_dict = {loss_key: sum(loss_dict[loss_key]) / len(loss_dict[loss_key]) for loss_key in self.loss_keys}
-        info_dict = {
-           "mean_gradient_norm": sum(grads) / len(grads),
-        }
+        info_dict = self.info_dict_callback(td, self.loss_module)
+        info_dict["mean_gradient_norm"] = sum(grads) / len(grads)
 
         return loss_dict, info_dict
+
+class ReacherSACAgent(OffpolicyAgent):
+    #override
+    def get_agent_details(self, agent_detail_args):
+        """
+        Should return a loss module, a list of loss keys, and a list of optimizers.
+        """
+        hidden_units = agent_detail_args["hidden_units"]
+        lr = agent_detail_args["lr"]
+        gamma = agent_detail_args["agent_gamma"]
+        target_eps = agent_detail_args["target_eps"]
+
+        n_states = 4
+        n_actions = 2
+        actor_net = nn.Sequential(
+            nn.Linear(n_states, hidden_units, device=self.device),
+            nn.ReLU(),
+            nn.Linear(hidden_units, hidden_units, device=self.device),
+            nn.ReLU(),
+            nn.Linear(hidden_units, 2*n_actions, device=self.device),
+            NormalParamExtractor()
+        )
+
+        policy_module = TensorDictModule(
+            actor_net, in_keys=["observation"], out_keys=["loc", "scale"]
+        )
+
+        policy_module = ProbabilisticActor(
+            module=policy_module,
+            spec=self.env.action_spec,
+            in_keys=["loc", "scale"],
+            distribution_class=TruncatedNormal,
+            default_interaction_type=InteractionType.RANDOM,
+            return_log_prob=True,
+        )
+
+        class QValueNet(nn.Module):
+            def __init__(self, device):
+                super().__init__()
+                self.net = nn.Sequential(
+                    nn.Linear(n_states+n_actions, hidden_units, device=device),
+                    nn.ReLU(),
+                    nn.Linear(hidden_units, hidden_units, device=device),
+                    nn.ReLU(),
+                    nn.Linear(hidden_units, 1, device=device),
+                )
+
+            def forward(self, state, action):
+                return self.net(torch.cat([state, action], -1))
+
+        qvalue_module = ValueOperator(
+            module=QValueNet(device=self.device),
+            in_keys=["observation", "action"],
+            out_keys=["state_action_value"],
+        )
+
+        loss_module = SACLoss(
+            actor_network=policy_module,
+            qvalue_network=qvalue_module,
+        )
+
+        loss_module.make_value_estimator(ValueEstimators.TD0, gamma=gamma)
+        loss_keys = ["loss_actor", "loss_qvalue", "loss_alpha"]
+
+        optim = torch.optim.Adam(loss_module.parameters(), lr=lr)
+
+        self.target_net = SoftUpdate(loss_module, eps=target_eps)
+
+        return loss_module, loss_keys, [optim], policy_module
+
+    #override
+    def update_callback(self):
+        """
+        Called after each optimization step in `process_batch`
+        """
+        self.target_net.step()
+
+    #override
+    def info_dict_callback(self, td, loss_module):
+        """
+        Called once at the end of `process_batch`. Should return a dictionary of information to pass to `wandb.log`.
+        """
+        return  {
+            "pos x distribution": wandb.Histogram(td["position"][0].cpu()),
+            "pos y distribution": wandb.Histogram(td["position"][1].cpu()),
+            "vel x distribution": wandb.Histogram(td["velocity"][0].cpu()),
+            "vel y distribution": wandb.Histogram(td["velocity"][1].cpu()),
+            "x action": wandb.Histogram(td["action"][0].cpu()),
+            "y action": wandb.Histogram(td["action"][1].cpu()),
+            "policy 'norm'": sum((p**2).sum() for p in loss_module.actor_network_params.parameters()),
+        }
+
+class ReacherDDPGAgent(OffpolicyAgent):
+    #override
+    def get_agent_details(self, agent_detail_args):
+        """
+        Should return a loss module, a list of loss keys, and a list of optimizers.
+        """
+        lr = agent_detail_args["lr"]
+        gamma = agent_detail_args["agent_gamma"]
+        target_eps = agent_detail_args["target_eps"]
+
+        n_states = 4
+        n_actions = 2
+        actor_net = nn.Sequential(
+            nn.Linear(n_states, 300, device=self.device),
+            nn.ReLU(),
+            nn.Linear(300, 200, device=self.device),
+            nn.ReLU(),
+            nn.Linear(200, n_actions, device=self.device),
+        )
+
+        policy_module = Actor(
+            module=actor_net,
+            spec=self.env.action_spec,
+            in_keys=["observation"],
+        )
+
+        class QValueNet(nn.Module):
+            def __init__(self, device):
+                super().__init__()
+                self.net = nn.Sequential(
+                    nn.Linear(n_states+n_actions, 400, device=device),
+                    nn.ReLU(),
+                    nn.Linear(400, 300, device=device),
+                    nn.ReLU(),
+                    nn.Linear(300, 1, device=device),
+                )
+
+            def forward(self, state, action):
+                return self.net(torch.cat([state, action], -1))
+
+        qvalue_module = ValueOperator(
+            module=QValueNet(device=self.device),
+            in_keys=["observation", "action"],
+            out_keys=["state_action_value"],
+        )
+
+        loss_module = DDPGLoss(
+            actor_network=policy_module,
+            value_network=qvalue_module,
+        )
+
+        loss_module.make_value_estimator(ValueEstimators.TD0, gamma=gamma)
+        loss_keys = ["loss_actor", "loss_value"]
+
+        optim = torch.optim.Adam(loss_module.parameters(), lr=lr)
+
+        self.target_net = SoftUpdate(loss_module, eps=target_eps)
+
+        return loss_module, loss_keys, [optim], policy_module
+
+    #override
+    def update_callback(self):
+        """
+        Called after each optimization step in `process_batch`
+        """
+        self.target_net.step()
+
+    #override
+    def info_dict_callback(self, td, loss_module):
+        """
+        Called once at the end of `process_batch`. Should return a dictionary of information to pass to `wandb.log`.
+        """
+        return  {
+            # "pos x distribution": wandb.Histogram(td["position"][0].cpu()),
+            # "pos y distribution": wandb.Histogram(td["position"][1].cpu()),
+            # "vel x distribution": wandb.Histogram(td["velocity"][0].cpu()),
+            # "vel y distribution": wandb.Histogram(td["velocity"][1].cpu()),
+            # "x action": wandb.Histogram(td["action"][0].cpu()),
+            # "y action": wandb.Histogram(td["action"][1].cpu()),
+            "policy 'norm'": sum((p**2).sum() for p in loss_module.actor_network_params.parameters()),
+            "value 'norm'": sum((p**2).sum() for p in loss_module.value_network_params.parameters()),
+        }
 
 def slow_policy(td):
     # Always go right
