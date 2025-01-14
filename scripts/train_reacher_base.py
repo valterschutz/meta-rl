@@ -26,16 +26,19 @@ agent = ReacherDDPGAgent(
     num_epochs=1,
     replay_buffer_args={
         "buffer_size": 1_000_000,
-        "min_buffer_size": 1_000,
+        "min_buffer_size": 10_000,
         "alpha": 0.7,
         "beta": 0.5
     },
-    max_grad_norm=1.0,
+    max_grad_norm=1e3,
     env=env,
     agent_detail_args={
         "agent_gamma": gamma,
         "target_eps": 0.999,
-        "lr": 1e-4
+        "actor_lr": 1e-5,
+        "value_lr": 1e-5,
+        "actor_max_grad": 1,
+        "value_max_grad": 10,
     }
 )
 

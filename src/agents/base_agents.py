@@ -308,7 +308,7 @@ class OffpolicyAgent(ABC):
     @abstractmethod
     def get_agent_details(self, agent_detail_args):
         """
-        Should return a loss module, a list of loss keys, and a list of optimizers.
+        Should return a loss module, a list of loss keys, a list of optimizers, a dictionary specifying maximum gradients, and the policy.
         """
         pass
 
@@ -335,7 +335,7 @@ class OffpolicyAgent(ABC):
         self.env = env
 
         # Subclasses implement this (template method pattern)
-        self.loss_module, self.loss_keys, self.optims, self.policy = self.get_agent_details(agent_detail_args)
+        self.loss_module, self.loss_keys, self.optims, self.max_grad_dict, self.policy = self.get_agent_details(agent_detail_args)
 
         self.replay_buffer = TensorDictReplayBuffer(
             storage=LazyTensorStorage(max_size=replay_buffer_args["buffer_size"], device=self.device),
@@ -354,7 +354,8 @@ class OffpolicyAgent(ABC):
             return
         for _ in range(self.num_epochs):
             loss_dict = {loss_key: [] for loss_key in self.loss_keys}
-            grads = []
+            pre_clip_grads = defaultdict(list)
+            post_clip_grads = defaultdict(list)
 
             subdata = self.replay_buffer.sample(self.sub_batch_size)
             # Interpret rewards differently depending on the batch
@@ -367,10 +368,18 @@ class OffpolicyAgent(ABC):
             for loss_key in self.loss_keys:
                 loss += loss_vals[loss_key]
                 loss_dict[loss_key].append(loss_vals[loss_key].item())
-
             loss.backward()
-            grad = torch.nn.utils.clip_grad_norm_(self.loss_module.parameters(), self.max_grad_norm)
-            grads.append(grad)
+
+            for k, v in self.max_grad_dict.items():
+                params_fn, max_grad_norm = v
+                grad = torch.nn.utils.clip_grad_norm_(params_fn(), max_grad_norm)
+                pre_clip_grads[k].append(grad)
+                post_clip_norm = torch.norm(
+                    torch.stack([
+                        p.grad.norm() for p in params_fn() if p.grad is not None
+                    ])
+                )
+                post_clip_grads[k].append(post_clip_norm)
 
             for optim in self.optims:
                 optim.step()
@@ -381,20 +390,22 @@ class OffpolicyAgent(ABC):
 
         loss_dict = {loss_key: sum(loss_dict[loss_key]) / len(loss_dict[loss_key]) for loss_key in self.loss_keys}
         info_dict = self.info_dict_callback(td, self.loss_module)
-        info_dict["mean_gradient_norm"] = sum(grads) / len(grads)
+        for k, v in pre_clip_grads.items():
+            info_dict[f"pre-clip mean_{k}_gradient_norm"] = sum(v) / len(v)
+        for k, v in post_clip_grads.items():
+            info_dict[f"post-clip mean_{k}_gradient_norm"] = sum(v) / len(v)
 
         return loss_dict, info_dict
 
 class ReacherSACAgent(OffpolicyAgent):
     #override
     def get_agent_details(self, agent_detail_args):
-        """
-        Should return a loss module, a list of loss keys, and a list of optimizers.
-        """
         hidden_units = agent_detail_args["hidden_units"]
         lr = agent_detail_args["lr"]
         gamma = agent_detail_args["agent_gamma"]
         target_eps = agent_detail_args["target_eps"]
+        actor_max_grad = agent_detail_args["actor_max_grad"]
+        value_max_grad = agent_detail_args["value_max_grad"]
 
         n_states = 4
         n_actions = 2
@@ -452,20 +463,19 @@ class ReacherSACAgent(OffpolicyAgent):
 
         self.target_net = SoftUpdate(loss_module, eps=target_eps)
 
-        return loss_module, loss_keys, [optim], policy_module
+        max_grad_dict = {
+            "actor": (loss_module.actor_network_params.parameters, actor_max_grad),
+            "value": (loss_module.qvalue_network_params.parameters, value_max_grad)
+        }
+
+        return loss_module, loss_keys, [optim], max_grad_dict, policy_module
 
     #override
     def update_callback(self):
-        """
-        Called after each optimization step in `process_batch`
-        """
         self.target_net.step()
 
     #override
     def info_dict_callback(self, td, loss_module):
-        """
-        Called once at the end of `process_batch`. Should return a dictionary of information to pass to `wandb.log`.
-        """
         return  {
             "pos x distribution": wandb.Histogram(td["position"][0].cpu()),
             "pos y distribution": wandb.Histogram(td["position"][1].cpu()),
@@ -479,12 +489,12 @@ class ReacherSACAgent(OffpolicyAgent):
 class ReacherDDPGAgent(OffpolicyAgent):
     #override
     def get_agent_details(self, agent_detail_args):
-        """
-        Should return a loss module, a list of loss keys, and a list of optimizers.
-        """
-        lr = agent_detail_args["lr"]
         gamma = agent_detail_args["agent_gamma"]
         target_eps = agent_detail_args["target_eps"]
+        actor_max_grad = agent_detail_args["actor_max_grad"]
+        value_max_grad = agent_detail_args["value_max_grad"]
+        actor_lr = agent_detail_args["actor_lr"]
+        value_lr = agent_detail_args["value_lr"]
 
         n_states = 4
         n_actions = 2
@@ -530,24 +540,24 @@ class ReacherDDPGAgent(OffpolicyAgent):
         loss_module.make_value_estimator(ValueEstimators.TD0, gamma=gamma)
         loss_keys = ["loss_actor", "loss_value"]
 
-        optim = torch.optim.Adam(loss_module.parameters(), lr=lr)
+        actor_optim = torch.optim.Adam(loss_module.actor_network_params.parameters(), lr=actor_lr)
+        value_optim = torch.optim.Adam(loss_module.value_network_params.parameters(), lr=value_lr)
 
         self.target_net = SoftUpdate(loss_module, eps=target_eps)
 
-        return loss_module, loss_keys, [optim], policy_module
+        max_grad_dict = {
+            "actor": (loss_module.actor_network_params.parameters, actor_max_grad),
+            "value": (loss_module.value_network_params.parameters, value_max_grad)
+        }
+
+        return loss_module, loss_keys, [actor_optim, value_optim], max_grad_dict, policy_module
 
     #override
     def update_callback(self):
-        """
-        Called after each optimization step in `process_batch`
-        """
         self.target_net.step()
 
     #override
     def info_dict_callback(self, td, loss_module):
-        """
-        Called once at the end of `process_batch`. Should return a dictionary of information to pass to `wandb.log`.
-        """
         return  {
             # "pos x distribution": wandb.Histogram(td["position"][0].cpu()),
             # "pos y distribution": wandb.Histogram(td["position"][1].cpu()),
