@@ -175,7 +175,7 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, big_re
 
 
 class OffpolicyTrainer():
-    def __init__(self, env, agent, progress_bar, times_to_eval, collector_device, log, max_eval_steps, collector_args, env_gamma, pixel_env=None):
+    def __init__(self, env, agent, progress_bar, times_to_eval, collector_device, log, max_eval_steps, collector_args, env_gamma, eval_env=None):
         self.env = env
         self.agent = agent
         self.total_frames = collector_args["total_frames"]
@@ -185,6 +185,10 @@ class OffpolicyTrainer():
         self.max_eval_steps = max_eval_steps
         self.progress_bar = progress_bar
         self.env_gamma = env_gamma
+        if eval_env is None:
+            self.eval_env = env
+        else:
+            self.eval_env = eval_env
 
         self.rand_collector = SyncDataCollector(
             env,
@@ -197,7 +201,7 @@ class OffpolicyTrainer():
 
         self.collector = SyncDataCollector(
             env,
-            agent.policy,
+            agent.train_policy,
             frames_per_batch=collector_args["batch_size"],
             total_frames=self.total_frames-agent.min_buffer_size,
             split_trajs=False,
@@ -239,7 +243,7 @@ class OffpolicyTrainer():
                     })
                 if i % self.eval_every_n_batch == 0:
                     with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
-                        eval_data = self.env.rollout(self.max_eval_steps, self.agent.policy)
+                        eval_data = self.eval_env.rollout(self.max_eval_steps, self.agent.eval_policy)
                     # Always use constrained return for evaluation
                     eval_normal_return = calc_return((eval_data["next", "normal_reward"]).flatten(), self.env_gamma)
                     eval_true_return = calc_return((eval_data["next", "normal_reward"]+eval_data["next","constraint_reward"]).flatten(), self.env_gamma)
@@ -250,6 +254,9 @@ class OffpolicyTrainer():
                             "batch": i
                         })
                     eval_true_returns.append(eval_true_return)
+                    # If evaluation env is pixelated, record video
+                    if "pixels" in eval_data:
+                        wandb.log({"video": wandb.Video(eval_data["pixels"].permute(0, 3, 1, 2).cpu(), fps=30)})
 
                 if self.progress_bar:
                     pbar.update(td.numel())
@@ -258,6 +265,22 @@ class OffpolicyTrainer():
             if self.progress_bar:
                 pbar.close()
         return eval_true_returns
+
+def log_video(td, i):
+    """
+    Logs a video to wandb, assuming that the "pixels" entry is present in `td`.
+    """
+    # dt = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+    # exp_name = f"{env_type}|{agent_type}_{dt}"
+    # logger = CSVLogger(exp_name=exp_name, log_dir="logs", video_format="pt")
+    # recorder = VideoRecorder(logger, tag="temp")
+    # record_env = TransformedEnv(pixel_env, recorder)
+    # with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
+    #     rollout = record_env.rollout(max_steps=sys.maxsize, policy=trainer.loss_module.actor_network)
+    # recorder.dump() # Saves video as a .pt file at `csv`
+    # # Now load the file as a tensor
+    # video = torch.load(Path(logger.log_dir) / exp_name / "videos" / "temp_0.pt").numpy()
+    wandb.log({"video": wandb.Video(video)})
 
 # TODO: not finished
 def train_meta_agent(

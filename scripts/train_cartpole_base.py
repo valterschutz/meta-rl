@@ -6,49 +6,24 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
 import torch
 
 import wandb
+from agents.base_agents import ReacherSACAgent, ReacherDDPGAgent, CartpoleDDPGAgent, CartpoleTD3Agent
 from trainers import OffpolicyTrainer
-from agents.base_agents import ToyDQNAgent
-from envs.toy_env import ToyEnv
-
-from torchrl.envs.transforms import Compose, StepCounter, DoubleToFloat, TransformedEnv, DTypeCastTransform
+from envs.dm_env import get_reacher_env, get_cartpole_env
+from torch import nn
 
 os.environ['MUJOCO_GL'] = 'egl'
 
-wandb.init(project="toy-base")
+wandb.init(project="cartpole-base")
 
 device = torch.device("cpu")
 batch_size = 64
 gamma = 0.99
 max_steps = 500
-n_states = 20
-big_reward = 10
-return_x = 9
-return_y = 1
 
-x, y = ToyEnv.calculate_xy(n_states=n_states, shortcut_steps=2, return_x=return_x, return_y=return_y, big_reward=big_reward, punishment=0, gamma=gamma)
+env = get_cartpole_env(constraint_weight=1.0, max_steps=max_steps, device=device)
+pixel_env = get_cartpole_env(constraint_weight=1.0, max_steps=max_steps, device=device, from_pixels=True, pixels_only=False)
 
-env = ToyEnv(
-    left_reward=x,
-    right_reward=x,
-    down_reward=y,
-    up_reward=y,
-    n_states=n_states,
-    shortcut_steps=2,
-    big_reward=big_reward,
-    punishment=0.0,
-    constraints_active=False,
-    random_start=False,
-    seed=None,
-    device=device)
-env = TransformedEnv(
-    env,
-    Compose(
-        StepCounter(max_steps=max_steps),
-        DTypeCastTransform(dtype_in=torch.long, dtype_out=torch.float32, in_keys=["observation"]),
-    )
-)
-
-agent = ToyDQNAgent(
+agent = CartpoleTD3Agent(
     device=device,
     batch_size=batch_size,
     sub_batch_size=batch_size,
@@ -63,10 +38,10 @@ agent = ToyDQNAgent(
     agent_detail_args={
         "agent_gamma": gamma,
         "target_eps": 0.999,
+        "actor_lr": 1e-4,
         "value_lr": 1e-4,
+        "actor_max_grad": 10,
         "value_max_grad": 10,
-        "num_cells": [64, 64],
-        "qvalue_eps": 0.1
     }
 )
 
@@ -84,6 +59,6 @@ trainer = OffpolicyTrainer(
         "total_frames": 1_000_000,
     },
     env_gamma=gamma,
-    eval_env=None
+    eval_env=pixel_env
 )
 trainer.train(when_constraints_active=0.99)

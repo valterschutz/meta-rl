@@ -26,9 +26,9 @@ from torchrl.envs.transforms import CatTensors
 from torchrl.envs.utils import (ExplorationType, check_env_specs,
                                 set_exploration_type)
 from torchrl.modules import (OneHotCategorical, ProbabilisticActor, TanhNormal,
-                             TruncatedNormal, ValueOperator, MLP)
-from torchrl.modules.tensordict_module import SafeModule, Actor
-from torchrl.objectives import (DDPGLoss, DiscreteSACLoss, SACLoss, SoftUpdate,
+                             TruncatedNormal, ValueOperator, MLP, EGreedyModule)
+from torchrl.modules.tensordict_module import SafeModule, Actor, QValueActor
+from torchrl.objectives import (DDPGLoss, DiscreteSACLoss, SACLoss, SoftUpdate, TD3Loss, DQNLoss,
                                 ValueEstimators)
 from torchrl.objectives.value import GAE
 from torchrl.record import VideoRecorder
@@ -327,15 +327,14 @@ class OffpolicyAgent(ABC):
         pass
 
 
-    def __init__(self, device, batch_size, sub_batch_size, num_epochs, replay_buffer_args, max_grad_norm, env, agent_detail_args):
+    def __init__(self, device, batch_size, sub_batch_size, num_epochs, replay_buffer_args, env, agent_detail_args):
         self.device = device
         self.sub_batch_size = sub_batch_size
         self.num_epochs = num_epochs
-        self.max_grad_norm = max_grad_norm
         self.env = env
 
         # Subclasses implement this (template method pattern)
-        self.loss_module, self.loss_keys, self.optims, self.max_grad_dict, self.policy = self.get_agent_details(agent_detail_args)
+        self.loss_module, self.loss_keys, self.optims, self.max_grad_dict, self.train_policy, self.eval_policy = self.get_agent_details(agent_detail_args)
 
         self.replay_buffer = TensorDictReplayBuffer(
             storage=LazyTensorStorage(max_size=replay_buffer_args["buffer_size"], device=self.device),
@@ -567,6 +566,284 @@ class ReacherDDPGAgent(OffpolicyAgent):
             # "y action": wandb.Histogram(td["action"][1].cpu()),
             "policy 'norm'": sum((p**2).sum() for p in loss_module.actor_network_params.parameters()),
             "value 'norm'": sum((p**2).sum() for p in loss_module.value_network_params.parameters()),
+        }
+
+class CartpoleDDPGAgent(OffpolicyAgent):
+    #override
+    def get_agent_details(self, agent_detail_args):
+        gamma = agent_detail_args["agent_gamma"]
+        target_eps = agent_detail_args["target_eps"]
+        actor_max_grad = agent_detail_args["actor_max_grad"]
+        value_max_grad = agent_detail_args["value_max_grad"]
+        actor_lr = agent_detail_args["actor_lr"]
+        value_lr = agent_detail_args["value_lr"]
+
+        n_states = 5
+        n_actions = 1
+        actor_net = nn.Sequential(
+            nn.Linear(n_states, 300, device=self.device),
+            nn.ReLU(),
+            nn.Linear(300, 200, device=self.device),
+            nn.ReLU(),
+            nn.Linear(200, n_actions, device=self.device),
+        )
+
+        policy_module = Actor(
+            module=actor_net,
+            spec=self.env.action_spec,
+            in_keys=["observation"],
+        )
+
+        class QValueNet(nn.Module):
+            def __init__(self, device):
+                super().__init__()
+                self.net = nn.Sequential(
+                    nn.Linear(n_states+n_actions, 400, device=device),
+                    nn.ReLU(),
+                    nn.Linear(400, 300, device=device),
+                    nn.ReLU(),
+                    nn.Linear(300, 1, device=device),
+                )
+
+            def forward(self, state, action):
+                return self.net(torch.cat([state, action], -1))
+
+        qvalue_module = ValueOperator(
+            module=QValueNet(device=self.device),
+            in_keys=["observation", "action"],
+            out_keys=["state_action_value"],
+        )
+
+        loss_module = DDPGLoss(
+            actor_network=policy_module,
+            value_network=qvalue_module,
+        )
+
+        loss_module.make_value_estimator(ValueEstimators.TD0, gamma=gamma)
+        loss_keys = ["loss_actor", "loss_value"]
+
+        actor_optim = torch.optim.Adam(loss_module.actor_network_params.parameters(), lr=actor_lr)
+        value_optim = torch.optim.Adam(loss_module.value_network_params.parameters(), lr=value_lr)
+
+        self.target_net = SoftUpdate(loss_module, eps=target_eps)
+
+        max_grad_dict = {
+            "actor": (loss_module.actor_network_params.parameters, actor_max_grad),
+            "value": (loss_module.value_network_params.parameters, value_max_grad)
+        }
+
+        return loss_module, loss_keys, [actor_optim, value_optim], max_grad_dict, policy_module
+
+    #override
+    def update_callback(self):
+        self.target_net.step()
+
+    #override
+    def info_dict_callback(self, td, loss_module):
+        return  {
+            # "pos x distribution": wandb.Histogram(td["position"][0].cpu()),
+            # "pos y distribution": wandb.Histogram(td["position"][1].cpu()),
+            # "vel x distribution": wandb.Histogram(td["velocity"][0].cpu()),
+            # "vel y distribution": wandb.Histogram(td["velocity"][1].cpu()),
+            # "x action": wandb.Histogram(td["action"][0].cpu()),
+            # "y action": wandb.Histogram(td["action"][1].cpu()),
+            "policy 'norm'": sum((p**2).sum() for p in loss_module.actor_network_params.parameters()),
+            "value 'norm'": sum((p**2).sum() for p in loss_module.value_network_params.parameters()),
+        }
+
+class CartpoleTD3Agent(OffpolicyAgent):
+    #override
+    def get_agent_details(self, agent_detail_args):
+        gamma = agent_detail_args["agent_gamma"]
+        target_eps = agent_detail_args["target_eps"]
+        actor_max_grad = agent_detail_args["actor_max_grad"]
+        value_max_grad = agent_detail_args["value_max_grad"]
+        actor_lr = agent_detail_args["actor_lr"]
+        value_lr = agent_detail_args["value_lr"]
+        action_spec = self.env.action_spec
+
+        n_states = 5
+        n_actions = 1
+        actor_net = nn.Sequential(
+            nn.Linear(n_states, 300, device=self.device),
+            nn.ReLU(),
+            nn.Linear(300, 200, device=self.device),
+            nn.ReLU(),
+            nn.Linear(200, n_actions, device=self.device),
+        )
+
+        policy_module = Actor(
+            module=actor_net,
+            spec=self.env.action_spec,
+            in_keys=["observation"],
+        )
+
+        class QValueNet(nn.Module):
+            def __init__(self, device):
+                super().__init__()
+                self.net = nn.Sequential(
+                    nn.Linear(n_states+n_actions, 400, device=device),
+                    nn.ReLU(),
+                    nn.Linear(400, 300, device=device),
+                    nn.ReLU(),
+                    nn.Linear(300, 1, device=device),
+                )
+
+            def forward(self, state, action):
+                return self.net(torch.cat([state, action], -1))
+
+        qvalue_module = ValueOperator(
+            module=QValueNet(device=self.device),
+            in_keys=["observation", "action"],
+            out_keys=["state_action_value"],
+        )
+
+        loss_module = TD3Loss(
+            actor_network=policy_module,
+            qvalue_network=qvalue_module,
+            action_spec=action_spec
+        )
+
+        loss_module.make_value_estimator(ValueEstimators.TD0, gamma=gamma)
+        loss_keys = ["loss_actor", "loss_qvalue"]
+
+        actor_optim = torch.optim.Adam(loss_module.actor_network_params.parameters(), lr=actor_lr)
+        value_optim = torch.optim.Adam(loss_module.qvalue_network_params.parameters(), lr=value_lr)
+
+        self.target_net = SoftUpdate(loss_module, eps=target_eps)
+
+        max_grad_dict = {
+            "actor": (loss_module.actor_network_params.parameters, actor_max_grad),
+            "value": (loss_module.qvalue_network_params.parameters, value_max_grad)
+        }
+
+        return loss_module, loss_keys, [actor_optim, value_optim], max_grad_dict, policy_module
+
+    #override
+    def update_callback(self):
+        self.target_net.step()
+
+    #override
+    def info_dict_callback(self, td, loss_module):
+        return  {
+            "policy 'norm'": sum((p**2).sum() for p in loss_module.actor_network_params.parameters()),
+            "value 'norm'": sum((p**2).sum() for p in loss_module.qvalue_network_params.parameters()),
+        }
+
+class FingerspinTD3Agent(OffpolicyAgent):
+    #override
+    def get_agent_details(self, agent_detail_args):
+        gamma = agent_detail_args["agent_gamma"]
+        target_eps = agent_detail_args["target_eps"]
+        actor_max_grad = agent_detail_args["actor_max_grad"]
+        value_max_grad = agent_detail_args["value_max_grad"]
+        actor_lr = agent_detail_args["actor_lr"]
+        value_lr = agent_detail_args["value_lr"]
+        action_spec = self.env.action_spec
+
+        n_states = 7
+        n_actions = 2
+        actor_net = nn.Sequential(
+            nn.Linear(n_states, 300, device=self.device),
+            nn.ReLU(),
+            nn.Linear(300, 200, device=self.device),
+            nn.ReLU(),
+            nn.Linear(200, n_actions, device=self.device),
+        )
+
+        policy_module = Actor(
+            module=actor_net,
+            spec=self.env.action_spec,
+            in_keys=["observation"],
+        )
+
+        class QValueNet(nn.Module):
+            def __init__(self, device):
+                super().__init__()
+                self.net = nn.Sequential(
+                    nn.Linear(n_states+n_actions, 400, device=device),
+                    nn.ReLU(),
+                    nn.Linear(400, 300, device=device),
+                    nn.ReLU(),
+                    nn.Linear(300, 1, device=device),
+                )
+
+            def forward(self, state, action):
+                return self.net(torch.cat([state, action], -1))
+
+        qvalue_module = ValueOperator(
+            module=QValueNet(device=self.device),
+            in_keys=["observation", "action"],
+            out_keys=["state_action_value"],
+        )
+
+        loss_module = TD3Loss(
+            actor_network=policy_module,
+            qvalue_network=qvalue_module,
+            action_spec=action_spec
+        )
+
+        loss_module.make_value_estimator(ValueEstimators.TD0, gamma=gamma)
+        loss_keys = ["loss_actor", "loss_qvalue"]
+
+        actor_optim = torch.optim.Adam(loss_module.actor_network_params.parameters(), lr=actor_lr)
+        value_optim = torch.optim.Adam(loss_module.qvalue_network_params.parameters(), lr=value_lr)
+
+        self.target_net = SoftUpdate(loss_module, eps=target_eps)
+
+        max_grad_dict = {
+            "actor": (loss_module.actor_network_params.parameters, actor_max_grad),
+            "value": (loss_module.qvalue_network_params.parameters, value_max_grad)
+        }
+
+        return loss_module, loss_keys, [actor_optim, value_optim], max_grad_dict, policy_module
+
+    #override
+    def update_callback(self):
+        self.target_net.step()
+
+    #override
+    def info_dict_callback(self, td, loss_module):
+        return  {
+            "policy 'norm'": sum((p**2).sum() for p in loss_module.actor_network_params.parameters()),
+            "value 'norm'": sum((p**2).sum() for p in loss_module.qvalue_network_params.parameters()),
+        }
+
+class ToyDQNAgent(OffpolicyAgent):
+    #override
+    def get_agent_details(self, agent_detail_args):
+        num_cells = agent_detail_args["num_cells"]
+        value_lr = agent_detail_args["value_lr"]
+        target_eps = agent_detail_args["target_eps"]
+        value_max_grad = agent_detail_args["value_max_grad"]
+        qvalue_eps = agent_detail_args["qvalue_eps"]
+
+        qvalue_network = MLP(in_features=1, out_features=4, num_cells=num_cells, activation_class=nn.ReLU).to(self.device)
+        loss_module = DQNLoss(value_network=qvalue_network, action_space="one-hot")
+        optim = torch.optim.Adam(loss_module.parameters(), lr=value_lr)
+
+        self.target_net = SoftUpdate(loss_module, eps=target_eps)
+
+        max_grad_dict = {
+            "value": (loss_module.value_network_params.parameters, value_max_grad)
+        }
+
+        eval_policy_module = QValueActor(qvalue_network, in_keys=["observation"], spec=self.env.action_spec).to(self.device)
+        train_policy_module = EGreedyModule(spec=self.env.action_spec, eps_init=qvalue_eps, eps_end=qvalue_eps)
+
+        return loss_module, ["loss"], [optim], max_grad_dict, train_policy_module, eval_policy_module
+
+
+    #override
+    def update_callback(self):
+        self.target_net.step()
+
+
+    #override
+    def info_dict_callback(self, td, loss_module):
+        return {
+            "state distribution": wandb.Histogram(td["observation"].cpu()),
+            "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()),
         }
 
 def slow_policy(td):

@@ -37,14 +37,44 @@ class ConstraintDMControlEnv(DMControlEnv):
         return tensordict_out
 
 
-def get_reacher_env(device, constraint_weight, max_steps):
+def get_reacher_env(constraint_weight, max_steps, **kwargs):
     transforms = Compose(
         DoubleToFloat(),
         StepCounter(max_steps=max_steps),
         CatTensors(in_keys=["position", "velocity"], out_key="observation", del_keys=False),
         # NOTE: the "reward" key should not be used directly
     )
-    env = ConstraintDMControlEnv("reacher", "easy", device=device, constraint_weight=constraint_weight)
+    env = ConstraintDMControlEnv("reacher", "easy", constraint_weight=constraint_weight, **kwargs)
+    env = TransformedEnv(
+        env,
+        transforms
+    )
+
+    return env
+
+def get_cartpole_env(constraint_weight, max_steps, **kwargs):
+    transforms = Compose(
+        DoubleToFloat(),
+        StepCounter(max_steps=max_steps),
+        CatTensors(in_keys=["position", "velocity"], out_key="observation", del_keys=False),
+        # NOTE: the "reward" key should not be used directly
+    )
+    env = ConstraintDMControlEnv("cartpole", "swingup", constraint_weight=constraint_weight, **kwargs)
+    env = TransformedEnv(
+        env,
+        transforms
+    )
+
+    return env
+
+def get_fingerspin_env(constraint_weight, max_steps, **kwargs):
+    transforms = Compose(
+        DoubleToFloat(),
+        StepCounter(max_steps=max_steps),
+        CatTensors(in_keys=["position", "velocity"], out_key="observation", del_keys=False),
+        # NOTE: the "reward" key should not be used directly
+    )
+    env = ConstraintDMControlEnv("finger", "spin", constraint_weight=constraint_weight, **kwargs)
     env = TransformedEnv(
         env,
         transforms

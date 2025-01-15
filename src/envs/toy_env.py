@@ -203,38 +203,3 @@ class ToyEnv(EnvBase):
         x = (return_x - big_reward * gamma**nx) / sum(gamma**k for k in range(0, nx)) - punishment
         y = (return_y - big_reward * gamma**ny) / sum(gamma**k for k in range(0, ny)) - punishment
         return x, y
-
-
-# def get_toy_env(env_config, gamma):
-#     x, y = ToyEnv.calculate_xy(
-#         env_config["n_states"],
-#         env_config["shortcut_steps"],
-#         env_config["return_x"],
-#         env_config["return_y"],
-#         env_config["big_reward"],
-#         gamma,
-#     )
-#     env = ToyEnv(
-#         left_reward=x,
-#         right_reward=x,
-#         down_reward=y,
-#         up_reward=y,
-#         n_states=env_config["n_states"],
-#         shortcut_steps=env_config["shortcut_steps"],
-#         big_reward=env_config["big_reward"],
-#         random_start=False,
-#         constraints_active=env_config["constraints_active"],
-#         seed=None,
-#         device=env_config["device"],
-#     ).to(env_config["device"])
-
-
-#     env = TransformedEnv(
-#         env,
-#         Compose(
-#             StepCounter(max_steps=env_config["max_steps"]),
-#         )
-#     )
-#     check_env_specs(env)
-
-#     return env
