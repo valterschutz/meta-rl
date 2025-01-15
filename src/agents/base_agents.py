@@ -8,7 +8,7 @@ from collections import defaultdict
 
 import matplotlib.pyplot as plt
 import torch
-from tensordict.nn import TensorDictModule
+from tensordict.nn import TensorDictModule, TensorDictSequential
 from tensordict.nn.distributions import NormalParamExtractor
 from tensordict.nn.probabilistic import InteractionType
 from torch import multiprocessing, nn
@@ -33,6 +33,7 @@ from torchrl.objectives import (DDPGLoss, DiscreteSACLoss, SACLoss, SoftUpdate, 
 from torchrl.objectives.value import GAE
 from torchrl.record import VideoRecorder
 from torchrl.record.loggers.csv import CSVLogger
+
 from tqdm import tqdm
 
 from abc import ABC, abstractmethod
@@ -819,7 +820,8 @@ class ToyDQNAgent(OffpolicyAgent):
         qvalue_eps = agent_detail_args["qvalue_eps"]
 
         qvalue_network = MLP(in_features=1, out_features=4, num_cells=num_cells, activation_class=nn.ReLU).to(self.device)
-        loss_module = DQNLoss(value_network=qvalue_network, action_space="one-hot")
+        eval_policy_module = QValueActor(qvalue_network, in_keys=["observation"], spec=self.env.action_spec).to(self.device)
+        loss_module = DQNLoss(value_network=eval_policy_module, action_space="one-hot", double_dqn=True)
         optim = torch.optim.Adam(loss_module.parameters(), lr=value_lr)
 
         self.target_net = SoftUpdate(loss_module, eps=target_eps)
@@ -828,8 +830,10 @@ class ToyDQNAgent(OffpolicyAgent):
             "value": (loss_module.value_network_params.parameters, value_max_grad)
         }
 
-        eval_policy_module = QValueActor(qvalue_network, in_keys=["observation"], spec=self.env.action_spec).to(self.device)
-        train_policy_module = EGreedyModule(spec=self.env.action_spec, eps_init=qvalue_eps, eps_end=qvalue_eps)
+        train_policy_module = TensorDictSequential(
+            eval_policy_module,
+            EGreedyModule(spec=self.env.action_spec, eps_init=qvalue_eps, eps_end=qvalue_eps)
+        )
 
         return loss_module, ["loss"], [optim], max_grad_dict, train_policy_module, eval_policy_module
 

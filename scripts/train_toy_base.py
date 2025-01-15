@@ -18,14 +18,16 @@ wandb.init(project="toy-base")
 
 device = torch.device("cpu")
 batch_size = 64
-gamma = 0.99
-max_steps = 500
-n_states = 20
+gamma = 0.999
+n_states = 500
+max_steps = 5*n_states
+shortcut_steps = 2
 big_reward = 10
-return_x = 9
+return_x = 5
 return_y = 1
+total_frames = 100_000
 
-x, y = ToyEnv.calculate_xy(n_states=n_states, shortcut_steps=2, return_x=return_x, return_y=return_y, big_reward=big_reward, punishment=0, gamma=gamma)
+x, y = ToyEnv.calculate_xy(n_states=n_states, shortcut_steps=shortcut_steps, return_x=return_x, return_y=return_y, big_reward=big_reward, punishment=0, gamma=gamma)
 
 env = ToyEnv(
     left_reward=x,
@@ -33,7 +35,7 @@ env = ToyEnv(
     down_reward=y,
     up_reward=y,
     n_states=n_states,
-    shortcut_steps=2,
+    shortcut_steps=shortcut_steps,
     big_reward=big_reward,
     punishment=0.0,
     constraints_active=False,
@@ -54,18 +56,18 @@ agent = ToyDQNAgent(
     sub_batch_size=batch_size,
     num_epochs=1,
     replay_buffer_args={
-        "buffer_size": 1_000_000,
-        "min_buffer_size": 10_000,
+        "buffer_size": total_frames,
+        "min_buffer_size": 0,
         "alpha": 0.7,
         "beta": 0.5
     },
     env=env,
     agent_detail_args={
         "agent_gamma": gamma,
-        "target_eps": 0.999,
-        "value_lr": 1e-4,
+        "target_eps": 0.99,
+        "value_lr": 1e-3,
         "value_max_grad": 10,
-        "num_cells": [64, 64],
+        "num_cells": [32, 32],
         "qvalue_eps": 0.1
     }
 )
@@ -81,7 +83,7 @@ trainer = OffpolicyTrainer(
     max_eval_steps=max_steps,
     collector_args={
         "batch_size": batch_size,
-        "total_frames": 1_000_000,
+        "total_frames": total_frames,
     },
     env_gamma=gamma,
     eval_env=None

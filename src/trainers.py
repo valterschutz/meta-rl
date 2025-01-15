@@ -221,7 +221,6 @@ class OffpolicyTrainer():
         eval_true_returns = []
         try:
             for i, td in enumerate(self.collector):
-                td["action"] = td["action"].to(torch.float32) # Due to bug in torchrl, need to manually cast to float
                 self.collector.update_policy_weights_()
 
                 # Constraints are either deterministically set at some batch or decided by a callback function
