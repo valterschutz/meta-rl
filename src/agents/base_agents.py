@@ -797,7 +797,7 @@ class FingerspinTD3Agent(OffpolicyAgent):
             "value": (loss_module.qvalue_network_params.parameters, value_max_grad)
         }
 
-        return loss_module, loss_keys, [actor_optim, value_optim], max_grad_dict, policy_module
+        return loss_module, loss_keys, [actor_optim, value_optim], max_grad_dict, policy_module, policy_module
 
     #override
     def update_callback(self):

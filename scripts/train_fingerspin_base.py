@@ -16,7 +16,7 @@ os.environ['MUJOCO_GL'] = 'egl'
 wandb.init(project="fingerspin-base")
 
 device = torch.device("cpu")
-batch_size = 64
+batch_size = 1_000
 gamma = 0.99
 max_steps = 500
 
@@ -27,10 +27,10 @@ agent = FingerspinTD3Agent(
     device=device,
     batch_size=batch_size,
     sub_batch_size=batch_size,
-    num_epochs=1,
+    num_epochs=1_000,
     replay_buffer_args={
         "buffer_size": 1_000_000,
-        "min_buffer_size": 10_000,
+        "min_buffer_size": 1_000,
         "alpha": 0.7,
         "beta": 0.5
     },
@@ -56,7 +56,7 @@ trainer = OffpolicyTrainer(
     max_eval_steps=max_steps,
     collector_args={
         "batch_size": batch_size,
-        "total_frames": 1_000_000,
+        "total_frames": 250_000,
     },
     env_gamma=gamma,
     eval_env=pixel_env
