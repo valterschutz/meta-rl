@@ -175,9 +175,12 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, big_re
 
 
 class OffpolicyTrainer():
-    def __init__(self, env, agent, progress_bar, times_to_eval, collector_device, log, max_eval_steps, collector_args, env_gamma, eval_env=None):
+    # def __init__(self, env, agent, progress_bar, times_to_eval, collector_device, log, max_eval_steps, collector_args, env_gamma, eval_env=None):
+    def __init__(self, env, agent, trainer_config):
         self.env = env
         self.agent = agent
+        self.trainer_config = trainer_config
+
         self.total_frames = collector_args["total_frames"]
         self.n_batches = self.total_frames // collector_args["batch_size"]
         self.eval_every_n_batch = self.n_batches // times_to_eval

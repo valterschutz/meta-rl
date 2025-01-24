@@ -7,25 +7,28 @@ from torchrl.envs.transforms import (Compose, RenameTransform, StepCounter,
                                      TransformedEnv)
 from torchrl.envs.utils import check_env_specs
 
-
 class ToyEnv(EnvBase):
 
     def __init__(
         self,
-        left_reward,
-        right_reward,
-        down_reward,
-        up_reward,
-        n_states,
-        shortcut_steps,
-        big_reward,
-        punishment,
-        constraints_active,
-        random_start=False,
-        seed=None,
-        device="cpu",
+        config
+        # left_reward,
+        # right_reward,
+        # down_reward,
+        # up_reward,
+        # n_states,
+        # shortcut_steps,
+        # big_reward,
+        # punishment,
+        # constraints_active,
+        # random_start=False,
+        # seed=None,
+        # device="cpu",
     ):
-        super().__init__(device=device, batch_size=[])
+        self.config = config
+        super().__init__(device=config.device, batch_size=[])
+
+        # TODO: more things from config to use
 
         assert (n_states-2) % shortcut_steps == 0, "n_states must be 2 more than a multiple of shortcut_steps"
         self.left_reward = left_reward
