@@ -27,19 +27,18 @@ def get_config(path):
     with open(path, 'r') as file:
         return yaml.safe_load(file)
 
-def main():
-
+def get_args():
     argparser = argparse.ArgumentParser()
     env_group = argparser.add_argument_group("Environment")
-    env_group.add_argument("--env", type=str, required=True, help="Path to a function that returns an environment object, in the form '<path>.<fun_name>'.")
+    env_group.add_argument("--env", type=str, required=True, help="Path to a function that returns an environment object, in the form '<path>#<fun_name>'.")
     env_group.add_argument("--env-config", type=str, required=True, help="Path to environment yaml configuration file.")
 
     # The algorithm is just a container for a torchrl.objectives loss function
     agent_group = argparser.add_argument_group("Algorithm")
     agent_group.add_argument("--rl-alg", type=str, required=True, help="String specififying the RL algorithm (e.g., SAC, DQN).")
-    agent_group.add_argument("--policy-network", type=str, help="Path to a a function that returns a 'policy_network' object, in the form '<path>.<fun_name>'.")
-    agent_group.add_argument("--state-value-network", type=str, help="Path to a function that returns a 'state_value_network' object, in the form '<path>.<fun_name>'.")
-    agent_group.add_argument("--action-value-network", type=str, help="Path to a function that returns an 'action_value_network' object, in the form '<path>.<fun_name>'.")
+    agent_group.add_argument("--policy-network", type=str, help="Path to a a function that returns a 'policy_network' object, in the form '<path>#<fun_name>'.")
+    agent_group.add_argument("--state-value-network", type=str, help="Path to a function that returns a 'state_value_network' object, in the form '<path>#<fun_name>'.")
+    agent_group.add_argument("--action-value-network", type=str, help="Path to a function that returns an 'action_value_network' object, in the form '<path>#<fun_name>'.")
     agent_group.add_argument("--alg-config", type=str, help="Path to algorithm yaml configuration file.")
 
     # An agent contains an algorithm and replay buffer. It has a method for processing a batch of data.
@@ -50,7 +49,10 @@ def main():
     agent_group = argparser.add_argument_group("Trainer")
     agent_group.add_argument("--trainer-config", type=str, help="Path to trainer yaml configuration file.")
 
-    args = argparser.parse_args()
+    return argparser.parse_args()
+
+def main():
+    args = get_args()
 
     env = get_obj(args.env)
     if args.rl_alg == "SAC":
