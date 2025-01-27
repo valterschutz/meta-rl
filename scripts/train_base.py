@@ -11,18 +11,18 @@ from trainers import OffpolicyTrainer
 from algorithms import get_sac_alg, get_dqn_alg
 from agents import Agent
 
-def get_obj(path_fun_str):
+def get_obj(path_obj_str):
     """
-    Returns the object that is returned by the function at the specified path.
-    The path should be in the form '<path>.<fun_name>'.
+    Returns the object at the specified path.
+    The path should be in the form '<path>.<obj_name>'.
     """
-    module = import_module(path_fun_str.split('.')[0])
-    fun = getattr(module, path_fun_str.split('.')[1])
-    return fun()
+    module = import_module(path_obj_str.split('.')[0])
+    obj = getattr(module, path_obj_str.split('.')[1])
+    return obj
 
-def get_config(path):
+def get_config(path) -> dict:
     """
-    Returns a configuration object from the specified yaml file.
+    Returns a dictionary from the specified yaml file.
     """
     with open(path, 'r') as file:
         return yaml.safe_load(file)
@@ -30,7 +30,7 @@ def get_config(path):
 def get_args():
     argparser = argparse.ArgumentParser()
     env_group = argparser.add_argument_group("Environment")
-    env_group.add_argument("--env", type=str, required=True, help="Path to a function that returns an environment object, in the form '<path>#<fun_name>'.")
+    env_group.add_argument("--env_cls", type=str, required=True, help="Path to an environment class, in the form '<path>#<cls_name>'.")
     env_group.add_argument("--env-config", type=str, required=True, help="Path to environment yaml configuration file.")
 
     # The algorithm is just a container for a torchrl.objectives loss function

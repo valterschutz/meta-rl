@@ -6,42 +6,67 @@ from torchrl.envs import EnvBase
 from torchrl.envs.transforms import (Compose, RenameTransform, StepCounter,
                                      TransformedEnv)
 from torchrl.envs.utils import check_env_specs
+from pydantic import BaseModel, model_validator
+from typing import Optional
+
 
 class ToyEnv(EnvBase):
 
+    class ToyEnvConfig(BaseModel):
+        return_x: Optional[float] = None
+        return_y: Optional[float] = None
+        left_reward: Optional[float] = None
+        right_reward: Optional[float] = None
+        down_reward: Optional[float] = None
+        up_reward: Optional[float] = None
+        n_states: int
+        shortcut_steps: int
+        big_reward: float
+        punishment: float
+        constraints_active: bool
+        random_start: bool
+        seed: Optional[int] = None
+        device: str
+
+        # Validate relationships between fields
+        @model_validator(mode="after")
+        def validate_config(self):
+            # Validate n_states and shortcut_steps
+            if (self.n_states - 2) % self.shortcut_steps != 0:
+                raise ValueError("n_states must be 2 more than a multiple of shortcut_steps")
+
+            # Validate conditional requirements for return_x
+            if self.return_x is None and (self.left_reward is None or self.right_reward is None):
+                raise ValueError(
+                    "If return_x is not provided, left_reward and right_reward are required."
+                )
+
+            if self.return_x is not None and (self.left_reward is not None or self.right_reward is not None):
+                raise ValueError(
+                    "If return_x is provided, left_reward and right_reward must not be set."
+                )
+
+            # Validate conditional requirements for return_y
+            if self.return_y is None and (self.up_reward is None or self.down_reward is None):
+                raise ValueError(
+                    "If return_y is not provided, up_reward and down_reward are required."
+                )
+
+            if self.return_y is not None and (self.up_reward is not None or self.down_reward is not None):
+                raise ValueError(
+                    "If return_y is provided, up_reward and down_reward must not be set."
+                )
+
+            return self
+
     def __init__(
         self,
-        config
-        # left_reward,
-        # right_reward,
-        # down_reward,
-        # up_reward,
-        # n_states,
-        # shortcut_steps,
-        # big_reward,
-        # punishment,
-        # constraints_active,
-        # random_start=False,
-        # seed=None,
-        # device="cpu",
+        config: ToyEnvConfig
     ):
-        self.config = config
         super().__init__(device=config.device, batch_size=[])
 
-        # TODO: more things from config to use
-
-        assert (n_states-2) % shortcut_steps == 0, "n_states must be 2 more than a multiple of shortcut_steps"
-        self.left_reward = left_reward
-        self.right_reward = right_reward
-        self.down_reward = down_reward
-        self.up_reward = up_reward
-        self.n_states = n_states
-        self.shortcut_steps = shortcut_steps
-        self.big_reward = big_reward
-        self.punishment = punishment
-        self.random_start = random_start
-
-        self.constraints_active = constraints_active
+        for k, v in config.model_dump().items():
+            setattr(self, k, v)
 
         self._make_spec()
         if seed is None:
@@ -206,3 +231,9 @@ class ToyEnv(EnvBase):
         x = (return_x - big_reward * gamma**nx) / sum(gamma**k for k in range(0, nx)) - punishment
         y = (return_y - big_reward * gamma**ny) / sum(gamma**k for k in range(0, ny)) - punishment
         return x, y
+
+
+    @staticmethod
+    def get_toy_env(config: ToyEnvConfig):
+        env = ToyEnv(config)
+        return env

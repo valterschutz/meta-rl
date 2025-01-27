@@ -1,0 +1,12 @@
+left_reward: float
+right_reward: float
+down_reward: float
+up_reward: float
+n_states: int
+shortcut_steps: int
+big_reward: float
+punishment: float
+constraints_active: bool
+random_start: bool
+seed: Optional[int]
+device: str
