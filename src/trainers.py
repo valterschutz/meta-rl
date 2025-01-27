@@ -218,8 +218,11 @@ class OffpolicyTrainer():
             if self.progress_bar:
                 pbar.update(td.numel())
 
-        eval_true_returns = []
+        loss_dicts = []
+        grad_dicts = []
         train_info_dicts = []
+        eval_info_dicts = []
+
         try:
             for i, td in enumerate(self.collector):
                 self.collector.update_policy_weights_()
@@ -230,8 +233,11 @@ class OffpolicyTrainer():
                 elif callable(when_constraints_active):
                     constraints_active: bool = when_constraints_active(td)
 
-                loss_dict, info_dict = self.agent.process_batch(td, constraints_active=constraints_active)
-                train_info_dicts.append(info_dict)
+                loss_dict, grad_dict = self.agent.process_batch(td, constraints_active=constraints_active)
+                loss_dicts.append(loss_dict)
+                grad_dicts.append(grad_dict)
+                train_info_dict = self.agent.train_info_dict_callback(td)
+                train_info_dicts.append(train_info_dict)
 
                 if self.log:
                     wandb.log({
@@ -240,21 +246,20 @@ class OffpolicyTrainer():
                         "true_reward": (td["next", "normal_reward"] + td["next", "constraint_reward"]).mean().item(),
                         "batch": i,
                         **loss_dict,
-                        **info_dict,
+                        **grad_dict,
+                        **train_info_dict,
                     })
                 if i % self.eval_every_n_batch == 0:
                     with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
                         eval_data = self.eval_env.rollout(self.max_eval_steps, self.agent.eval_policy)
                     # Always use constrained return for evaluation
-                    eval_normal_return = calc_return((eval_data["next", "normal_reward"]).flatten(), self.env_gamma)
-                    eval_true_return = calc_return((eval_data["next", "normal_reward"]+eval_data["next","constraint_reward"]).flatten(), self.env_gamma)
+                    eval_info_dict = self.agent.eval_info_dict_callback(eval_data)
+                    eval_info_dicts.append(eval_info_dict)
                     if self.log:
                         wandb.log({
-                            "eval normal return": eval_normal_return,
-                            "eval true return": eval_true_return,
-                            "batch": i
+                            "batch": i,
+                            **eval_info_dict
                         })
-                    eval_true_returns.append(eval_true_return)
                     # If evaluation env is pixelated, record video
                     if "pixels" in eval_data:
                         wandb.log({"video": wandb.Video(eval_data["pixels"].permute(0, 3, 1, 2).cpu(), fps=30)})
@@ -265,7 +270,12 @@ class OffpolicyTrainer():
             print(f"Training interrupted.")
             if self.progress_bar:
                 pbar.close()
-        return eval_true_returns, train_info_dicts
+        return {
+            "loss_dicts": loss_dicts,
+            "grad_dicts": grad_dicts,
+            "train_info_dicts": train_info_dicts,
+            "eval_info_dicts": eval_info_dicts
+        }
 
 def log_video(td, i):
     """

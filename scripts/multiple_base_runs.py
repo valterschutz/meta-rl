@@ -1,5 +1,6 @@
 import os
 import sys
+import pickle
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
 
@@ -28,6 +29,7 @@ def get_env(config):
         shortcut_steps=config["shortcut_steps"],
         big_reward=config["big_reward"],
         punishment=0.0,
+        gamma=config["env_gamma"],
         constraints_active=False,
         random_start=False,
         seed=None,
@@ -89,31 +91,27 @@ def get_trainer(config):
     )
     return trainer
 
-def get_qvalues(when_constraints_active, times_to_train, config):
-    qvalues = []
+def multiple_runs(when_constraints_active, times_to_train, config):
+    result_dicts = []
     for i in range(times_to_train):
         trainer = get_trainer(config)
-        eval_true_returns, train_info_dicts = trainer.train(when_constraints_active=when_constraints_active)
-        q_values = []
-        for d in train_info_dicts:
-            q_values.append(d["qvalues"])
-        qvalues.append(np.array(q_values))
-    qvalues = np.array(qvalues)
-    qvalues = pd.DataFrame(qvalues)
-    qvalues["run"] = qvalues.index
-    qvalues = qvalues.melt(id_vars="run", var_name="batch", value_name="qvalue")
-    return qvalues
+        result_dict = trainer.train(when_constraints_active=when_constraints_active)
+        result_dicts.append(result_dict)
+    # qvalues = np.array(qvalues)
+    # qvalues = pd.DataFrame(qvalues)
+    # qvalues["run"] = qvalues.index
+    # qvalues = qvalues.melt(id_vars="run", var_name="batch", value_name="qvalue")
+    return result_dicts
 
 def main():
     wandb.init(project="toy-base")
 
     config = {}
-    config["n_states"] = 50
+    config["n_states"] = 10
     config["device"] = torch.device("cpu")
     config["env_gamma"] = 0.999
     config["batch_size"] = 64
     config["max_steps"] = 5*config["n_states"]
-    # config["total_frames"] = 50_000
     config["total_frames"] = 100_000
 
     config["shortcut_steps"] = 2
@@ -123,12 +121,14 @@ def main():
 
     config["agent_gamma"] = 0.999
 
-    unconstrained_qvalues = get_qvalues(when_constraints_active=1.0, times_to_train=5, config=config)
-    constrained_qvalues = get_qvalues(when_constraints_active=0.0, times_to_train=5, config=config)
+    unconstrained_result_dicts = multiple_runs(when_constraints_active=1.0, times_to_train=5, config=config)
+    constrained_result_dicts = multiple_runs(when_constraints_active=0.0, times_to_train=5, config=config)
 
-    # Save dataframes in data folder
-    unconstrained_qvalues.to_csv("data/unconstrained_qvalues|2025-01-27|50-states.csv", index=False)
-    constrained_qvalues.to_csv("data/constrained_qvalues|2025-01-27|50-states.csv", index=False)
+    # Pickle the data
+    with open("data/unconstrained_result_dicts|2025-01-27|10-states.pkl", "wb") as f:
+        pickle.dump(unconstrained_result_dicts, f)
+    with open("data/constrained_result_dicts|2025-01-27|10-states.pkl", "wb") as f:
+        pickle.dump(constrained_result_dicts, f)
 
 
 if __name__ == "__main__":

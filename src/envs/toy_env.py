@@ -20,6 +20,7 @@ class ToyEnv(EnvBase):
         shortcut_steps,
         big_reward,
         punishment,
+        gamma,
         constraints_active,
         random_start=False,
         seed=None,
@@ -36,6 +37,7 @@ class ToyEnv(EnvBase):
         self.shortcut_steps = shortcut_steps
         self.big_reward = big_reward
         self.punishment = punishment
+        self.gamma = gamma
         self.random_start = random_start
 
         self.constraints_active = constraints_active

@@ -1,13 +1,15 @@
-import warnings
 import math
+import warnings
 from pathlib import Path
 
 warnings.filterwarnings("ignore")
 import os
 import sys
+from abc import ABC, abstractmethod
 from collections import defaultdict
 
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
 from tensordict.nn import TensorDictModule, TensorDictSequential
 from tensordict.nn.distributions import NormalParamExtractor
@@ -26,18 +28,16 @@ from torchrl.envs.libs.gym import GymEnv
 from torchrl.envs.transforms import CatTensors
 from torchrl.envs.utils import (ExplorationType, check_env_specs,
                                 set_exploration_type)
-from torchrl.modules import (OneHotCategorical, ProbabilisticActor, TanhNormal,
-                             TruncatedNormal, ValueOperator, MLP, EGreedyModule)
-from torchrl.modules.tensordict_module import SafeModule, Actor, QValueActor
-from torchrl.objectives import (DDPGLoss, DiscreteSACLoss, SACLoss, SoftUpdate, TD3Loss, DQNLoss,
-                                ValueEstimators)
+from torchrl.modules import (MLP, EGreedyModule, OneHotCategorical,
+                             ProbabilisticActor, TanhNormal, TruncatedNormal,
+                             ValueOperator)
+from torchrl.modules.tensordict_module import Actor, QValueActor, SafeModule
+from torchrl.objectives import (DDPGLoss, DiscreteSACLoss, DQNLoss, SACLoss,
+                                SoftUpdate, TD3Loss, ValueEstimators)
 from torchrl.objectives.value import GAE
 from torchrl.record import VideoRecorder
 from torchrl.record.loggers.csv import CSVLogger
-
 from tqdm import tqdm
-
-from abc import ABC, abstractmethod
 
 import wandb
 
@@ -322,9 +322,16 @@ class OffpolicyAgent(ABC):
         pass
 
     @abstractmethod
-    def info_dict_callback(self, td):
+    def train_info_dict_callback(self, td):
         """
         Called once at the end of `process_batch`. Should return a dictionary of information to pass to `wandb.log`.
+        """
+        pass
+
+    @abstractmethod
+    def eval_info_dict_callback(self, td):
+        """
+        Called during evaluation. Should return a dictionary of information to pass to `wandb.log`.
         """
         pass
 
@@ -390,13 +397,13 @@ class OffpolicyAgent(ABC):
             self.replay_buffer.update_tensordict_priority(subdata)
 
         loss_dict = {loss_key: sum(loss_dict[loss_key]) / len(loss_dict[loss_key]) for loss_key in self.loss_keys}
-        info_dict = self.info_dict_callback(td)
+        grad_dict = {}
         for k, v in pre_clip_grads.items():
-            info_dict[f"pre-clip mean_{k}_gradient_norm"] = sum(v) / len(v)
+            grad_dict[f"pre-clip mean_{k}_gradient_norm"] = sum(v) / len(v)
         for k, v in post_clip_grads.items():
-            info_dict[f"post-clip mean_{k}_gradient_norm"] = sum(v) / len(v)
+            grad_dict[f"post-clip mean_{k}_gradient_norm"] = sum(v) / len(v)
 
-        return loss_dict, info_dict
+        return loss_dict, grad_dict
 
 class ReacherSACAgent(OffpolicyAgent):
     #override
@@ -812,6 +819,7 @@ class FingerspinTD3Agent(OffpolicyAgent):
         }
 
 class ToyDQNAgent(OffpolicyAgent):
+
     #override
     def get_agent_details(self, agent_detail_args):
         num_cells = agent_detail_args["num_cells"]
@@ -838,27 +846,56 @@ class ToyDQNAgent(OffpolicyAgent):
 
         return loss_module, ["loss"], [optim], max_grad_dict, train_policy_module, eval_policy_module
 
-
     #override
     def update_callback(self):
         self.target_net.step()
 
 
     #override
-    def info_dict_callback(self, td, loss_module):
+    def info_dict_callback(self, td):
         return {
             "state distribution": wandb.Histogram(td["observation"].cpu()),
             "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()),
         }
 
 class ToyTabularDQNAgent(OffpolicyAgent):
+    def get_policy_matrix(self):
+        policy_matrix = torch.zeros((self.n_states, 4))
+        for i in range(self.n_states):
+            state = torch.tensor([[i]])
+            chosen_action = self.eval_policy(state)[0].argmax()
+            # The non-chosen actions get weight epsilon, and the chosen action gets weight 1 - 3*epsilon/4
+            policy_matrix[i] = torch.tensor([self.qvalue_eps/4, self.qvalue_eps/4, self.qvalue_eps/4, self.qvalue_eps/4])
+            policy_matrix[i, chosen_action] = 1 - 3*self.qvalue_eps/4
+        return policy_matrix
+
+    def get_distance_to_slow_policy(self):
+        # The slow policy always picks the second action (index 1)
+        slow_policy_matrix = torch.zeros((self.n_states, 4))
+        slow_policy_matrix[:, 1] = 1
+
+        # The distance is the sum of the absolute differences between the two policy matrices
+        policy_matrix = self.get_policy_matrix()
+        return torch.sum(torch.abs(policy_matrix - slow_policy_matrix)).item()
+
+    def get_distance_to_fast_policy(self):
+        # The fast policy always picks the last action (index 3)
+        fast_policy_matrix = torch.zeros((self.n_states, 4))
+        fast_policy_matrix[:, 3] = 1
+
+        # The distance is the sum of the absolute differences between the two policy matrices
+        policy_matrix = self.get_policy_matrix()
+        return torch.sum(torch.abs(policy_matrix - fast_policy_matrix)).item()
+
     #override
     def get_agent_details(self, agent_detail_args):
         n_states = agent_detail_args["n_states"]
+        self.n_states = n_states # Used in distance methods
         value_lr = agent_detail_args["value_lr"]
         target_eps = agent_detail_args["target_eps"]
         value_max_grad = agent_detail_args["value_max_grad"]
         qvalue_eps = agent_detail_args["qvalue_eps"]
+        self.qvalue_eps = qvalue_eps # Used in distance methods
 
         class QValueNet(nn.Module):
             def __init__(self, n_states):
@@ -888,19 +925,29 @@ class ToyTabularDQNAgent(OffpolicyAgent):
 
         return loss_module, ["loss"], [optim], max_grad_dict, train_policy_module, eval_policy_module
 
-
     #override
     def update_callback(self):
         self.target_net.step()
 
-
     #override
-    def info_dict_callback(self, td):
+    def train_info_dict_callback(self, td):
         return {
             "state distribution": wandb.Histogram(td["observation"].cpu()),
             "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()),
-            "qvalues": math.sqrt(sum((p**2).sum() for p in self.loss_module.value_network_params.parameters()))
+            "qvalues": math.sqrt(sum((p**2).sum() for p in self.loss_module.value_network_params.parameters())),
+            "distance to slow policy": self.get_distance_to_slow_policy(),
+            "distance to fast policy": self.get_distance_to_fast_policy()
         }
+
+    #override
+    def eval_info_dict_callback(self, td):
+        eval_normal_return = calc_return((td["next", "normal_reward"]).flatten(), self.env.gamma)
+        eval_true_return = calc_return((td["next", "normal_reward"]+td["next","constraint_reward"]).flatten(), self.env.gamma)
+        return {
+            "eval normal return": eval_normal_return,
+            "eval true return": eval_true_return,
+        }
+
 
 def slow_policy(td):
     # Always go right
