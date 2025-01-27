@@ -1,4 +1,5 @@
 import warnings
+import math
 from pathlib import Path
 
 warnings.filterwarnings("ignore")
@@ -321,7 +322,7 @@ class OffpolicyAgent(ABC):
         pass
 
     @abstractmethod
-    def info_dict_callback(self, td, loss_module):
+    def info_dict_callback(self, td):
         """
         Called once at the end of `process_batch`. Should return a dictionary of information to pass to `wandb.log`.
         """
@@ -389,7 +390,7 @@ class OffpolicyAgent(ABC):
             self.replay_buffer.update_tensordict_priority(subdata)
 
         loss_dict = {loss_key: sum(loss_dict[loss_key]) / len(loss_dict[loss_key]) for loss_key in self.loss_keys}
-        info_dict = self.info_dict_callback(td, self.loss_module)
+        info_dict = self.info_dict_callback(td)
         for k, v in pre_clip_grads.items():
             info_dict[f"pre-clip mean_{k}_gradient_norm"] = sum(v) / len(v)
         for k, v in post_clip_grads.items():
@@ -848,6 +849,57 @@ class ToyDQNAgent(OffpolicyAgent):
         return {
             "state distribution": wandb.Histogram(td["observation"].cpu()),
             "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()),
+        }
+
+class ToyTabularDQNAgent(OffpolicyAgent):
+    #override
+    def get_agent_details(self, agent_detail_args):
+        n_states = agent_detail_args["n_states"]
+        value_lr = agent_detail_args["value_lr"]
+        target_eps = agent_detail_args["target_eps"]
+        value_max_grad = agent_detail_args["value_max_grad"]
+        qvalue_eps = agent_detail_args["qvalue_eps"]
+
+        class QValueNet(nn.Module):
+            def __init__(self, n_states):
+                super().__init__()
+                self.n_states = n_states
+                self.net = nn.Linear(n_states, 4)
+
+            def forward(self, x):
+                # Transform input to onehot, converting to torch.float32
+                x = torch.nn.functional.one_hot(x, num_classes=self.n_states).float().squeeze(-2)
+                return self.net(x)
+        qvalue_network = QValueNet(n_states).to(self.device)
+        eval_policy_module = QValueActor(qvalue_network, in_keys=["observation"], spec=self.env.action_spec).to(self.device)
+        loss_module = DQNLoss(value_network=eval_policy_module, action_space="one-hot", double_dqn=True)
+        optim = torch.optim.Adam(loss_module.parameters(), lr=value_lr)
+
+        self.target_net = SoftUpdate(loss_module, eps=target_eps)
+
+        max_grad_dict = {
+            "value": (loss_module.value_network_params.parameters, value_max_grad)
+        }
+
+        train_policy_module = TensorDictSequential(
+            eval_policy_module,
+            EGreedyModule(spec=self.env.action_spec, eps_init=qvalue_eps, eps_end=qvalue_eps)
+        )
+
+        return loss_module, ["loss"], [optim], max_grad_dict, train_policy_module, eval_policy_module
+
+
+    #override
+    def update_callback(self):
+        self.target_net.step()
+
+
+    #override
+    def info_dict_callback(self, td):
+        return {
+            "state distribution": wandb.Histogram(td["observation"].cpu()),
+            "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()),
+            "qvalues": math.sqrt(sum((p**2).sum() for p in self.loss_module.value_network_params.parameters()))
         }
 
 def slow_policy(td):

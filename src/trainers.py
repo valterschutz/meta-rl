@@ -219,6 +219,7 @@ class OffpolicyTrainer():
                 pbar.update(td.numel())
 
         eval_true_returns = []
+        train_info_dicts = []
         try:
             for i, td in enumerate(self.collector):
                 self.collector.update_policy_weights_()
@@ -230,6 +231,7 @@ class OffpolicyTrainer():
                     constraints_active: bool = when_constraints_active(td)
 
                 loss_dict, info_dict = self.agent.process_batch(td, constraints_active=constraints_active)
+                train_info_dicts.append(info_dict)
 
                 if self.log:
                     wandb.log({
@@ -263,7 +265,7 @@ class OffpolicyTrainer():
             print(f"Training interrupted.")
             if self.progress_bar:
                 pbar.close()
-        return eval_true_returns
+        return eval_true_returns, train_info_dicts
 
 def log_video(td, i):
     """
