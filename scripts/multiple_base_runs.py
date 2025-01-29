@@ -5,12 +5,14 @@ import pickle
 sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
 
 import torch
+from torch.profiler import profile, record_function, ProfilerActivity
 import numpy as np
 import pandas as pd
 
 import wandb
 from trainers import OffpolicyTrainer
-from agents.base_agents import ToyTabularDQNAgent
+from loggers import ToyTabularQLogger
+from agents.base_agents import ToyTabularQAgent
 from envs.toy_env import ToyEnv
 
 from torchrl.envs.transforms import Compose, StepCounter, DoubleToFloat, TransformedEnv, DTypeCastTransform
@@ -46,41 +48,58 @@ def get_env(env_config):
     return env
 
 
+# def get_agent(env, agent_config, env_config, collector_config):
+#     agent = ToyTabularDQNAgent(
+#         device=agent_config["device"],
+#         batch_size=collector_config["batch_size"],
+#         sub_batch_size=collector_config["batch_size"],
+#         num_epochs=1,
+#         replay_buffer_args={
+#             "buffer_size": collector_config["total_frames"],
+#             "min_buffer_size": agent_config["min_buffer_size"],
+#             "alpha": agent_config["alpha"],
+#             "beta": agent_config["beta"],
+#         },
+#         env=env,
+#         agent_detail_args={
+#             "agent_gamma": agent_config["agent_gamma"],
+#             "target_eps": agent_config["target_eps"],
+#             "value_lr": agent_config["value_lr"],
+#             "value_max_grad": agent_config["value_max_grad"],
+#             "n_states": env_config["n_states"],
+#             "qvalue_eps": agent_config["qvalue_eps"],
+#         }
+#     )
+
+#     return agent
+
 def get_agent(env, agent_config, env_config, collector_config):
-    agent = ToyTabularDQNAgent(
+    agent = ToyTabularQAgent(
+        n_states=env_config["n_states"],
+        agent_gamma=agent_config["agent_gamma"],
+        lr=agent_config["lr"],
+        epsilon=agent_config["epsilon"],
+        replay_buffer_size=agent_config["replay_buffer_size"],
         device=agent_config["device"],
-        batch_size=collector_config["batch_size"],
-        sub_batch_size=collector_config["batch_size"],
-        num_epochs=1,
-        replay_buffer_args={
-            "buffer_size": collector_config["total_frames"],
-            "min_buffer_size": agent_config["min_buffer_size"],
-            "alpha": agent_config["alpha"],
-            "beta": agent_config["beta"],
-        },
-        env=env,
-        agent_detail_args={
-            "agent_gamma": agent_config["agent_gamma"],
-            "target_eps": agent_config["target_eps"],
-            "value_lr": agent_config["value_lr"],
-            "value_max_grad": agent_config["value_max_grad"],
-            "n_states": env_config["n_states"],
-            "qvalue_eps": agent_config["qvalue_eps"],
-        }
+        rb_alpha=agent_config["rb_alpha"],
+        rb_beta=agent_config["rb_beta"],
+        rb_batch_size=agent_config["rb_batch_size"],
+        num_optim_steps=agent_config["num_optim_steps"]
     )
+
 
     return agent
 
 def get_trainer(env_config, agent_config, collector_config):
     env = get_env(env_config)
     agent = get_agent(env, agent_config, env_config, collector_config)
+
     trainer = OffpolicyTrainer(
         env=env,
         agent=agent,
+        logger=ToyTabularQLogger(env, agent),
         progress_bar=True,
-        times_to_eval=2,
         collector_device=collector_config["device"],
-        log=True,
         max_eval_steps=env_config["max_steps"],
         collector_args={
             "batch_size": collector_config["batch_size"],
@@ -95,8 +114,8 @@ def multiple_runs(times_to_train, env_config, agent_config, collector_config, **
     result_dicts = []
     for i in range(times_to_train):
         trainer = get_trainer(env_config, agent_config, collector_config)
-        result_dict = trainer.train(**trainer_kwargs)
-        result_dicts.append(result_dict)
+        trainer.train(**trainer_kwargs)
+        result_dicts.append(trainer.logger.dump())
     return result_dicts
 
 def main():
@@ -105,8 +124,8 @@ def main():
     env_config = {}
     env_config["n_states"] = 10
     env_config["device"] = torch.device("cpu")
-    env_config["env_gamma"] = 0.999
-    env_config["max_steps"] = 5*env_config["n_states"]
+    env_config["env_gamma"] = 0.99
+    env_config["max_steps"] = 10*env_config["n_states"]
     env_config["shortcut_steps"] = 2
     env_config["big_reward"] = 10
     env_config["return_x"] = 5
@@ -114,30 +133,29 @@ def main():
 
     collector_config = {}
     collector_config["batch_size"] = 64
-    collector_config["total_frames"] = 200_000
+    collector_config["total_frames"] = 1_000_000
     collector_config["device"] = env_config["device"]
 
     agent_config = {}
-    agent_config["agent_gamma"] = 0.999
-    agent_config["buffer_size"] = collector_config["total_frames"]
-    agent_config["min_buffer_size"] = 0
-    agent_config["alpha"] = 0.7
-    agent_config["beta"] = 0.5
+    agent_config["agent_gamma"] = env_config["env_gamma"]
+    agent_config["lr"] = 1e-2
+    agent_config["epsilon"] = 0.1
+    agent_config["replay_buffer_size"] = 1000
     agent_config["device"] = env_config["device"]
+    agent_config["rb_alpha"] = 0.7
+    agent_config["rb_beta"] = 0.5
+    agent_config["rb_batch_size"] = 64
+    agent_config["num_optim_steps"] = 1
 
-    agent_config["target_eps"] = 0.99
-    agent_config["value_lr"] = 1e-2
-    agent_config["value_max_grad"] = 1
-    agent_config["qvalue_eps"] = 0.05
+    unconstrained_result_dicts = multiple_runs(times_to_train=1, env_config=env_config, agent_config=agent_config, collector_config=collector_config, when_constraints_active=1.0, times_to_eval=10)
+    # constrained_result_dicts = multiple_runs(times_to_train=1, env_config=env_config, agent_config=agent_config, collector_config=collector_config, when_constraints_active=0.0)
 
-    unconstrained_result_dicts = multiple_runs(times_to_train=5, env_config=env_config, agent_config=agent_config, collector_config=collector_config, when_constraints_active=1.0)
-    constrained_result_dicts = multiple_runs(times_to_train=5, env_config=env_config, agent_config=agent_config, collector_config=collector_config, when_constraints_active=0.0)
 
     # Pickle the data
-    with open("data/unconstrained_result_dicts|2025-01-29|10-states.pkl", "wb") as f:
-        pickle.dump(unconstrained_result_dicts, f)
-    with open("data/constrained_result_dicts|2025-01-29|10-states.pkl", "wb") as f:
-        pickle.dump(constrained_result_dicts, f)
+    # with open("data/unconstrained_result_dicts|2025-01-29|10-states.pkl", "wb") as f:
+    #     pickle.dump(unconstrained_result_dicts, f)
+    # with open("data/constrained_result_dicts|2025-01-29|10-states.pkl", "wb") as f:
+    #     pickle.dump(constrained_result_dicts, f)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 
+import time
 import warnings
 from pathlib import Path
 
@@ -42,7 +43,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "./"))
 
 from envs.toy_env import ToyEnv
 from envs.dm_env import ConstraintDMControlEnv
-from utils import calc_return
+from utils import calc_return, timed_iterator
 from agents.base_agents import ToySACAgent, PointSACAgent, ReacherSACAgent
 
 
@@ -175,13 +176,12 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, big_re
 
 
 class OffpolicyTrainer():
-    def __init__(self, env, agent, progress_bar, times_to_eval, collector_device, log, max_eval_steps, collector_args, env_gamma, eval_env=None):
+    def __init__(self, env, agent, logger, progress_bar, collector_device, max_eval_steps, collector_args, env_gamma, eval_env=None):
         self.env = env
         self.agent = agent
         self.total_frames = collector_args["total_frames"]
         self.n_batches = self.total_frames // collector_args["batch_size"]
-        self.eval_every_n_batch = self.n_batches // times_to_eval
-        self.log = log
+        self.logger = logger
         self.max_eval_steps = max_eval_steps
         self.progress_bar = progress_bar
         self.env_gamma = env_gamma
@@ -208,7 +208,14 @@ class OffpolicyTrainer():
             device=collector_device,
         )
 
-    def train(self, when_constraints_active):
+    def train(self, when_constraints_active, times_to_eval):
+        if times_to_eval == 0:
+            self.eval_every_n_batch = None
+        elif times_to_eval > self.n_batches:
+            raise ValueError(f"times_to_eval ({times_to_eval}) must be less than total_frames/batch_size ({self.n_batches})")
+        else:
+            self.eval_every_n_batch = self.n_batches // times_to_eval
+
         if self.progress_bar:
             pbar = tqdm(total=self.total_frames)
         if isinstance(when_constraints_active, float):
@@ -218,64 +225,82 @@ class OffpolicyTrainer():
             if self.progress_bar:
                 pbar.update(td.numel())
 
-        loss_dicts = []
-        grad_dicts = []
-        train_info_dicts = []
-        eval_info_dicts = []
+        for i, (td, sampling_time) in enumerate(timed_iterator(self.collector)):
+            self.collector.update_policy_weights_()
 
-        try:
-            for i, td in enumerate(self.collector):
-                self.collector.update_policy_weights_()
+            # Constraints are either deterministically set at some batch or decided by a callback function
+            if isinstance(when_constraints_active, float):
+                constraints_active: bool = i >= batch_to_activate_constraints
+            elif callable(when_constraints_active):
+                constraints_active: bool = when_constraints_active(td)
 
-                # Constraints are either deterministically set at some batch or decided by a callback function
-                if isinstance(when_constraints_active, float):
-                    constraints_active: bool = i >= batch_to_activate_constraints
-                elif callable(when_constraints_active):
-                    constraints_active: bool = when_constraints_active(td)
+            process_start_time = time.time()
+            self.agent.process_batch(td, constraints_active=constraints_active)
+            process_time = time.time() - process_start_time
 
-                loss_dict, grad_dict = self.agent.process_batch(td, constraints_active=constraints_active)
-                loss_dicts.append(loss_dict)
-                grad_dicts.append(grad_dict)
-                train_info_dict = self.agent.train_info_dict_callback(td)
-                train_info_dicts.append(train_info_dict)
+            train_log_start_time = time.time()
+            self.logger.train_log(td)
+            train_log_time = time.time() - train_log_start_time
 
-                if self.log:
-                    wandb.log({
-                        "normal_reward": td["next", "normal_reward"].mean().item(),
-                        "constraint_reward": td["next", "constraint_reward"].mean().item(),
-                        "true_reward": (td["next", "normal_reward"] + td["next", "constraint_reward"]).mean().item(),
-                        "batch": i,
-                        **loss_dict,
-                        **grad_dict,
-                        **train_info_dict,
-                    })
-                if i % self.eval_every_n_batch == 0:
-                    with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
-                        eval_data = self.eval_env.rollout(self.max_eval_steps, self.agent.eval_policy)
-                    # Always use constrained return for evaluation
-                    eval_info_dict = self.agent.eval_info_dict_callback(eval_data)
-                    eval_info_dicts.append(eval_info_dict)
-                    if self.log:
-                        wandb.log({
-                            "batch": i,
-                            **eval_info_dict
-                        })
-                    # If evaluation env is pixelated, record video
-                    if "pixels" in eval_data:
-                        wandb.log({"video": wandb.Video(eval_data["pixels"].permute(0, 3, 1, 2).cpu(), fps=30)})
+            wandb.log({
+                "sampling_time": sampling_time,
+                "process_time": process_time,
+                "train_log_time": train_log_time,
+            })
 
-                if self.progress_bar:
-                    pbar.update(td.numel())
-        except KeyboardInterrupt as e:
-            print(f"Training interrupted.")
+            # loss_dicts.append(loss_dict)
+            # grad_dicts.append(grad_dict)
+            # train_info_dict = self.agent.train_info_dict_callback(td)
+            # train_info_dicts.append(train_info_dict)
+
+            # if self.log:
+            #     wandb.log({
+            #         "normal_reward": td["next", "normal_reward"].mean().item(),
+            #         "constraint_reward": td["next", "constraint_reward"].mean().item(),
+            #         "true_reward": (td["next", "normal_reward"] + td["next", "constraint_reward"]).mean().item(),
+            #         "batch": i,
+            #         **loss_dict,
+            #         **grad_dict,
+            #         **train_info_dict,
+            #         **agent.info_dict_callback(td),
+            #     })
+            if self.eval_every_n_batch is not None and i % self.eval_every_n_batch == 0:
+                eval_start_time = time.time()
+                with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
+                    eval_td = self.eval_env.rollout(self.max_eval_steps, self.agent.eval_policy)
+                eval_time = time.time() - eval_start_time
+                # Always use constrained return for evaluation
+                # eval_info_dict = self.agent.eval_info_dict_callback(eval_data)
+                # eval_info_dicts.append(eval_info_dict)
+                # if self.log:
+                #     wandb.log({
+                #         "batch": i,
+                #         **eval_info_dict
+                #     })
+                # # If evaluation env is pixelated, record video
+                # if "pixels" in eval_data:
+                #     wandb.log({"video": wandb.Video(eval_data["pixels"].permute(0, 3, 1, 2).cpu(), fps=30)})
+                eval_log_start_time = time.time()
+                self.logger.eval_log(eval_td)
+                eval_log_time = time.time() - eval_log_start_time
+                wandb.log({
+                    "eval_time": eval_time,
+                    "eval_log_time": eval_log_time,
+                })
+
+
             if self.progress_bar:
-                pbar.close()
-        return {
-            "loss_dicts": loss_dicts,
-            "grad_dicts": grad_dicts,
-            "train_info_dicts": train_info_dicts,
-            "eval_info_dicts": eval_info_dicts
-        }
+                pbar.update(td.numel())
+        # except KeyboardInterrupt as e:
+        #     print(f"Training interrupted.")
+        #     if self.progress_bar:
+        #         pbar.close()
+        # return {
+        #     "loss_dicts": loss_dicts,
+        #     "grad_dicts": grad_dicts,
+        #     "train_info_dicts": train_info_dicts,
+        #     "eval_info_dicts": eval_info_dicts
+        # }
 
 def log_video(td, i):
     """

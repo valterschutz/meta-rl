@@ -1,6 +1,7 @@
 """Utility functions for training and logging."""
 
 import torch
+import time
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
@@ -100,3 +101,17 @@ class MethodLogger:
 
             return wrapper
         return attr
+
+def timed_iterator(iterator):
+    """
+    Wrap an iterator to yield each element along with the time it took to produce it.
+
+    Args:
+        iterator: Any iterable or iterator.
+
+    Yields:
+        (element, elapsed_time): The element from the iterator and the time it took to produce it.
+    """
+    for item in iterator:
+        start_time = time.time()  # Start the timer
+        yield item, time.time() - start_time  # Calculate elapsed time after producing the item

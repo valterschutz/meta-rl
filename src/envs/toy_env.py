@@ -40,6 +40,8 @@ class ToyEnv(EnvBase):
         self.gamma = gamma
         self.random_start = random_start
 
+        self.n_actions = 4
+
         self.constraints_active = constraints_active
 
         self._make_spec()

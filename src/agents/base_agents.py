@@ -1,6 +1,11 @@
 import math
+from typing import Protocol
+import random
 import warnings
 from pathlib import Path
+
+from tensordict.tensordict import TensorDictBase
+from tensordict.nn import TensorDictModuleBase
 
 warnings.filterwarnings("ignore")
 import os
@@ -11,6 +16,7 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.nn.functional as F
 from tensordict.nn import TensorDictModule, TensorDictSequential
 from tensordict.nn.distributions import NormalParamExtractor
 from tensordict.nn.probabilistic import InteractionType
@@ -865,14 +871,14 @@ class ToyTabularDQNAgent(OffpolicyAgent):
             state = torch.tensor([[i]])
             chosen_action = self.eval_policy(state)[0].argmax()
             # The non-chosen actions get weight epsilon, and the chosen action gets weight 1 - 3*epsilon/4
-            policy_matrix[i] = self.qvalue_eps/4 * torch.tensor([1,1,1,1])
-            policy_matrix[i, chosen_action] = 1 - 3*self.qvalue_eps/4
+            policy_matrix[i] = torch.tensor([0,0,0,0])
+            policy_matrix[i, chosen_action] = 1
         return policy_matrix
 
     def get_distance_to_slow_policy(self):
         # The slow policy always picks the second action (index 1)
-        slow_policy_matrix = self.qvalue_eps * torch.ones((self.n_states-1, 4)) # Don't care about terminal state
-        slow_policy_matrix[:-1, 1] = 1 - 3*self.qvalue_eps
+        slow_policy_matrix = torch.zeros((self.n_states-1, 4)) # Don't care about terminal state
+        slow_policy_matrix[:, 1] = 1
 
         # The distance is the sum of the absolute differences between the two policy matrices
         policy_matrix = self.get_policy_matrix()
@@ -880,9 +886,9 @@ class ToyTabularDQNAgent(OffpolicyAgent):
 
     def get_distance_to_fast_policy(self):
         # The fast policy always picks the last action (index 3), except in the state preceeding the terminal state
-        fast_policy_matrix = self.qvalue_eps * torch.ones((self.n_states-1, 4))
-        fast_policy_matrix[:-1, 3] = 1 - 3*self.qvalue_eps
-        fast_policy_matrix[-1, 1] = 1 - 3*self.qvalue_eps # State preceeding terminal state always picks second action
+        fast_policy_matrix = torch.zeros((self.n_states-1, 4))
+        fast_policy_matrix[:-1, 3] = 1
+        fast_policy_matrix[-1, 1] = 1
 
         # The distance is the sum of the absolute differences between the two policy matrices
         policy_matrix = self.get_policy_matrix()
@@ -892,7 +898,8 @@ class ToyTabularDQNAgent(OffpolicyAgent):
         qvalues = torch.zeros((self.n_states-1, 4))
         for i in range(self.n_states-1):
             state = torch.tensor([[i]])
-            qvalues[i] = self.loss_module.value_network(state)[0]
+            with torch.no_grad():
+                qvalues[i] = self.qvalue_network(state)
         return qvalues
 
     #override
@@ -910,13 +917,20 @@ class ToyTabularDQNAgent(OffpolicyAgent):
                 super().__init__()
                 self.n_states = n_states
                 self.net = nn.Linear(n_states, 4)
+                # self.net = nn.Sequential(
+                #     nn.Linear(n_states, 300),
+                #     nn.ReLU(),
+                #     nn.Linear(300, 200),
+                #     nn.ReLU(),
+                #     nn.Linear(200, 4),
+                # )
 
             def forward(self, x):
                 # Transform input to onehot, converting to torch.float32
                 x = torch.nn.functional.one_hot(x, num_classes=self.n_states).float().squeeze(-2)
                 return self.net(x)
-        qvalue_network = QValueNet(n_states).to(self.device)
-        eval_policy_module = QValueActor(qvalue_network, in_keys=["observation"], spec=self.env.action_spec).to(self.device)
+        self.qvalue_network = QValueNet(n_states).to(self.device)
+        eval_policy_module = QValueActor(self.qvalue_network, in_keys=["observation"], spec=self.env.action_spec).to(self.device)
         loss_module = DQNLoss(value_network=eval_policy_module, action_space="one-hot", double_dqn=True)
         optim = torch.optim.Adam(loss_module.parameters(), lr=value_lr)
 
@@ -951,7 +965,7 @@ class ToyTabularDQNAgent(OffpolicyAgent):
         return {
             "state distribution": wandb.Histogram(td["observation"].cpu()),
             "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()),
-            "qvalues": math.sqrt(sum((p**2).sum() for p in self.loss_module.value_network_params.parameters())),
+            "value network param norm": math.sqrt(sum((p**2).sum() for p in self.loss_module.value_network_params.parameters())),
             "distance to slow policy": self.get_distance_to_slow_policy(),
             "distance to fast policy": self.get_distance_to_fast_policy(),
             # "policy matrix": wandb.Image(self.get_policy_matrix(), "Policy matrix"),
@@ -983,3 +997,94 @@ def fast_policy(td):
     else:
         td["action"] = torch.tensor([0, 1, 0, 0], device=td.device)
     return td
+
+class Agent(Protocol):
+    def process_batch(self, td, constraints_active):
+        ...
+
+    @property
+    def min_buffer_size(self) -> int:
+        ...
+
+    @property
+    def train_policy(self, td: TensorDictBase) -> TensorDictModuleBase:
+        ...
+
+    @property
+    def eval_policy(self, td: TensorDictBase) -> TensorDictModuleBase:
+        ...
+
+class ToyTabularQAgent(Agent):
+    def __init__(self, n_states, agent_gamma, lr, epsilon, replay_buffer_size, device, rb_alpha, rb_beta, rb_batch_size, num_optim_steps):
+        self.device = device
+        self.qvalues = torch.zeros(n_states, 4).to(device)
+        # self.qvalues[:, 3] = 1
+        self.gamma = agent_gamma
+        self.lr = lr
+        self.epsilon = epsilon
+        self.min_buffer_size
+
+        # self._train_policy = TensorDictModule(lambda obs: self.train_policy_fn(obs), in_keys=["observation"], out_keys=["action"])
+        # self._eval_policy = TensorDictModule(lambda obs: self.eval_policy_fn(obs), in_keys=["observation"], out_keys=["action"])
+
+        self.replay_buffer = TensorDictReplayBuffer(
+            storage=LazyTensorStorage(max_size=replay_buffer_size, device=self.device),
+            sampler=PrioritizedSampler(max_capacity=replay_buffer_size, alpha=rb_alpha, beta=rb_beta),
+            priority_key="td_error",
+            batch_size=rb_batch_size,
+        )
+        self.num_optim_steps = num_optim_steps
+
+    def process_batch(self, td, constraints_active):
+        # Add td to replay buffer
+        data_view = td.reshape(-1)
+        self.replay_buffer.extend(data_view.to(self.device))
+
+        # Sample self.num_optim_steps times from the replay buffer
+        for _ in range(self.num_optim_steps):
+            subdata = self.replay_buffer.sample()
+            self.update_qvalues(subdata, constraints_active)
+
+    def update_qvalues(self, td, constraints_active):
+        action_indices = td["action"].argmax(dim=-1)
+        if constraints_active:
+            rewards = td["next", "normal_reward"]
+        else:
+            rewards = td["next", "normal_reward"] + td["next", "constraint_reward"]
+        td_errors = rewards + self.gamma * self.qvalues[td["next", "observation"]].max(dim=-1)[0] - self.qvalues[td["observation"], action_indices]
+        self.qvalues[td["observation"], action_indices] += self.lr * td_errors
+        self.latest_td_errors = td_errors # For logging purposes
+        td["td_error"] = td_errors.abs()
+        self.replay_buffer.update_tensordict_priority(td)
+
+    def train_policy_fn(self, obs):
+        # Epsilon-greedy policy
+        if random.random() < self.epsilon:
+            action = torch.randint(4, (1,))
+        else:
+            action = self.qvalues[obs].argmax(-1)
+        return F.one_hot(action, num_classes=4)
+
+    def eval_policy_fn(self, obs):
+        action = self.qvalues[obs].argmax(-1)
+        return F.one_hot(action, num_classes=4)
+
+    @property
+    def min_buffer_size(self):
+        return 0
+
+    # @property
+    # def train_policy(self):
+    #     return self._train_policy
+
+    def train_policy(self, td):
+        td["action"] = self.train_policy_fn(td["observation"])
+        return td
+
+    def eval_policy(self, td):
+        td["action"] = self.eval_policy_fn(td["observation"])
+        return td
+
+    # @property
+    # def eval_policy(self):
+    #     return self._eval_policy
