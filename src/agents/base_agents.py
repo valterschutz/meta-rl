@@ -860,32 +860,40 @@ class ToyDQNAgent(OffpolicyAgent):
 
 class ToyTabularDQNAgent(OffpolicyAgent):
     def get_policy_matrix(self):
-        policy_matrix = torch.zeros((self.n_states, 4))
-        for i in range(self.n_states):
+        policy_matrix = torch.zeros((self.n_states-1, 4))
+        for i in range(self.n_states-1):
             state = torch.tensor([[i]])
             chosen_action = self.eval_policy(state)[0].argmax()
             # The non-chosen actions get weight epsilon, and the chosen action gets weight 1 - 3*epsilon/4
-            policy_matrix[i] = torch.tensor([self.qvalue_eps/4, self.qvalue_eps/4, self.qvalue_eps/4, self.qvalue_eps/4])
+            policy_matrix[i] = self.qvalue_eps/4 * torch.tensor([1,1,1,1])
             policy_matrix[i, chosen_action] = 1 - 3*self.qvalue_eps/4
         return policy_matrix
 
     def get_distance_to_slow_policy(self):
         # The slow policy always picks the second action (index 1)
-        slow_policy_matrix = torch.zeros((self.n_states, 4))
-        slow_policy_matrix[:, 1] = 1
+        slow_policy_matrix = self.qvalue_eps * torch.ones((self.n_states-1, 4)) # Don't care about terminal state
+        slow_policy_matrix[:-1, 1] = 1 - 3*self.qvalue_eps
 
         # The distance is the sum of the absolute differences between the two policy matrices
         policy_matrix = self.get_policy_matrix()
         return torch.sum(torch.abs(policy_matrix - slow_policy_matrix)).item()
 
     def get_distance_to_fast_policy(self):
-        # The fast policy always picks the last action (index 3)
-        fast_policy_matrix = torch.zeros((self.n_states, 4))
-        fast_policy_matrix[:, 3] = 1
+        # The fast policy always picks the last action (index 3), except in the state preceeding the terminal state
+        fast_policy_matrix = self.qvalue_eps * torch.ones((self.n_states-1, 4))
+        fast_policy_matrix[:-1, 3] = 1 - 3*self.qvalue_eps
+        fast_policy_matrix[-1, 1] = 1 - 3*self.qvalue_eps # State preceeding terminal state always picks second action
 
         # The distance is the sum of the absolute differences between the two policy matrices
         policy_matrix = self.get_policy_matrix()
         return torch.sum(torch.abs(policy_matrix - fast_policy_matrix)).item()
+
+    def get_qvalues(self):
+        qvalues = torch.zeros((self.n_states-1, 4))
+        for i in range(self.n_states-1):
+            state = torch.tensor([[i]])
+            qvalues[i] = self.loss_module.value_network(state)[0]
+        return qvalues
 
     #override
     def get_agent_details(self, agent_detail_args):
@@ -931,12 +939,24 @@ class ToyTabularDQNAgent(OffpolicyAgent):
 
     #override
     def train_info_dict_callback(self, td):
+        fig, axs = plt.subplots(1, 2)
+        p0 = axs[0].imshow(self.get_policy_matrix(), cmap="viridis")
+        axs[0].set_title("Policy matrix")
+        p1 = axs[1].imshow(self.get_qvalues(), cmap="viridis")
+        axs[1].set_title("Q values")
+        # Add colorbars to each plot
+        fig.colorbar(p0, ax=axs[0])
+        fig.colorbar(p1, ax=axs[1])
+
         return {
             "state distribution": wandb.Histogram(td["observation"].cpu()),
             "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()),
             "qvalues": math.sqrt(sum((p**2).sum() for p in self.loss_module.value_network_params.parameters())),
             "distance to slow policy": self.get_distance_to_slow_policy(),
-            "distance to fast policy": self.get_distance_to_fast_policy()
+            "distance to fast policy": self.get_distance_to_fast_policy(),
+            # "policy matrix": wandb.Image(self.get_policy_matrix(), "Policy matrix"),
+            # "qvalues": wandb.Image(self.get_qvalues(), "Q values")
+            "policy matrix and qvalues": wandb.Image(fig, "Policy matrix and Q values")
         }
 
     #override
