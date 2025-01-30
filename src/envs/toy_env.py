@@ -137,15 +137,13 @@ class ToyEnv(EnvBase):
                 "constraint_reward": 1 * self.right_reward,
             },
             down_action: {
-                # Allowing down jumps from the second state would create two actions that lead to the same state, which we don't want
-                "mask": action == down_action and state > 1,
-                "state_change": -self.shortcut_steps,
+                "mask": action == down_action and (state-1) % self.shortcut_steps != 0,
+                "state_change": -self.shortcut_steps if (state % self.shortcut_steps) == 0 else -(state % self.shortcut_steps),
                 "constraint_reward": 1 * self.down_reward,
             },
             up_action: {
-                # Allowing up jumps from the pre-final state would create two actions that lead to the same state, which we don't want
-                "mask": action == up_action and state < self.n_states-2,
-                "state_change": self.shortcut_steps,
+                "mask": action == up_action and (state+1) % self.shortcut_steps != 0,
+                "state_change": (self.shortcut_steps-(state%self.shortcut_steps)),
                 "constraint_reward": 1 * self.up_reward,
             },
         }
@@ -199,9 +197,31 @@ class ToyEnv(EnvBase):
 
     @staticmethod
     def calculate_xy(n_states, shortcut_steps, return_x, return_y, big_reward, gamma):
+        # TODO: should work with new env
         assert (n_states-1) % shortcut_steps == 0, "n_states must be 1 more than a multiple of shortcut_steps"
         nx = n_states - 1 # Number of times we need to step 'right' to reach the end
         ny = (n_states - 1) // shortcut_steps # Number of times we need to step 'up' to reach the end
         x = (return_x - big_reward * gamma**(nx-1)) / sum(gamma**k for k in range(0, nx))
         y = (return_y - big_reward * gamma**(ny-1)) / sum(gamma**k for k in range(0, ny))
         return x, y
+
+    def calc_optimal_qvalues(self):
+        qvalues = torch.zeros(self.n_states, self.n_actions)
+        delta = 1
+        while delta > 1e-4:
+            delta = 0
+            for state in range(self.n_states-1):
+                for action in range(self.n_actions):
+                    td = TensorDict({
+                        "observation": torch.tensor([state]),
+                        "action": F.one_hot(torch.tensor(action), num_classes=self.n_actions),
+                        # "step_count": torch.zeros(1),
+                    })
+                    td = self.step(td)
+                    old_Q = qvalues[state, action].item()
+                    # if td["next", "normal_reward"] != 0:
+                    #     pass
+                    qvalues[state, action] = td["next", "normal_reward"] + self.gamma * qvalues[td["next", "observation"], :].max()
+                    delta = max(delta, abs(old_Q - qvalues[state, action].item()))
+                    # print(delta)
+        return qvalues

@@ -1029,23 +1029,26 @@ class ToyTabularQAgent(Agent):
         self.epsilon = epsilon
         self.min_buffer_size
 
-        self.replay_buffer = TensorDictReplayBuffer(
-            storage=LazyTensorStorage(max_size=replay_buffer_size, device=self.device),
-            sampler=PrioritizedSampler(max_capacity=replay_buffer_size, alpha=rb_alpha, beta=rb_beta),
-            priority_key="td_error",
-            batch_size=rb_batch_size,
-        )
+        # self.replay_buffer = TensorDictReplayBuffer(
+        #     storage=LazyTensorStorage(max_size=replay_buffer_size, device=self.device),
+        #     sampler=PrioritizedSampler(max_capacity=replay_buffer_size, alpha=rb_alpha, beta=rb_beta),
+        #     priority_key="td_error",
+        #     batch_size=rb_batch_size,
+        # )
         self.num_optim_steps = num_optim_steps
 
     def process_batch(self, td, constraints_active):
         # Add td to replay buffer
-        data_view = td.reshape(-1)
-        self.replay_buffer.extend(data_view.to(self.device))
+        # data_view = td.reshape(-1)
+        # self.replay_buffer.extend(data_view.to(self.device))
 
         # Sample self.num_optim_steps times from the replay buffer
-        for _ in range(self.num_optim_steps):
-            subdata = self.replay_buffer.sample()
-            self.update_qvalues(subdata, constraints_active)
+        # for _ in range(self.num_optim_steps):
+        #     subdata = self.replay_buffer.sample()
+        #     self.update_qvalues(subdata, constraints_active)
+
+        # While debugging, ensuring that RB is not the problem
+        self.update_qvalues(td, constraints_active)
 
     def update_qvalues(self, td, constraints_active):
         action_indices = td["action"].argmax(dim=-1)
@@ -1056,8 +1059,8 @@ class ToyTabularQAgent(Agent):
         td_errors = rewards + self.gamma * self.qvalues[td["next", "observation"]].max(dim=-1)[0] - self.qvalues[td["observation"], action_indices]
         self.qvalues[td["observation"], action_indices] += self.lr * td_errors
         self.latest_td_errors = td_errors # For logging purposes
-        td["td_error"] = td_errors.abs()
-        self.replay_buffer.update_tensordict_priority(td)
+        # td["td_error"] = td_errors.abs()
+        # self.replay_buffer.update_tensordict_priority(td)
 
     def train_policy_fn(self, obs):
         # Epsilon-greedy policy

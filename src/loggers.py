@@ -41,35 +41,13 @@ class ToyTabularQLogger(Logger):
         self.history["qvalues"] = []
         self.history["epsilon"] = []
 
-        self.optimal_qvalues = self.calc_optimal_qvalues()
+        self.optimal_qvalues = self.env.calc_optimal_qvalues()
 
-    def calc_optimal_qvalues(self):
-        qvalues = torch.zeros(self.env.n_states, self.env.n_actions)
-        delta = 1
-        while delta > 1e-4:
-            delta = 0
-            for state in range(self.env.n_states-1):
-                for action in range(self.env.n_actions):
-                    td = TensorDict({
-                        "observation": torch.tensor([state]),
-                        "action": F.one_hot(torch.tensor(action), num_classes=self.env.n_actions),
-                        "step_count": torch.zeros(1),
-                    })
-                    td = self.env.step(td)
-                    old_Q = qvalues[state, action].item()
-                    # if td["next", "normal_reward"] != 0:
-                    #     pass
-                    qvalues[state, action] = td["next", "normal_reward"] + self.env.gamma * qvalues[td["next", "observation"], :].max()
-                    delta = max(delta, abs(old_Q - qvalues[state, action].item()))
-                    # print(delta)
-        print(qvalues)
-        return qvalues
 
     def train_log(self, td):
         self.batch_count += 1
         self.history["qvalues"].append(self.agent.qvalues.clone())
         self.history["epsilon"].append(self.agent.epsilon)
-
 
 
         wandb.log({

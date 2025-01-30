@@ -4,6 +4,7 @@ import sys
 import unittest
 
 import torch
+import torch.nn.functional as F
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../src/envs"))
 sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
@@ -62,248 +63,140 @@ class TestToyEnv(unittest.TestCase):
             device=self.config["device"],
         )
 
-    def test_move_left(self):
-        # Moving left from start position should not move us
+    def assert_helper(self, starting_state, action, ending_state, normal_reward, constraint_reward):
+        """
+        Asserts that starting in the starting_state and taking the action results in the ending_state, normal_reward, and constraint_reward.
+        """
         td = self.env.reset()
-        td["action"] = torch.tensor(
-            [1, 0, 0, 0]
-        )
+        td["observation"] = torch.tensor([starting_state])
+        td["action"] = F.one_hot(torch.tensor([action]), num_classes=4)
         td = self.env.step(td)
-        self.assertTrue(
-            torch.equal(
-                td["next", "observation"],
-                torch.tensor([0]),
-            )
+        self.assertEqual(
+            td["next", "observation"].item(),
+            ending_state
         )
         self.assertAlmostEqual(
             td["next", "normal_reward"].item(),
-            0.0,
+            normal_reward,
             places=3,
         )
         self.assertAlmostEqual(
             td["next", "constraint_reward"].item(),
-            self.config["left_reward"],
+            constraint_reward,
             places=3,
         )
 
+    def test_move_left(self):
+        # Moving left from start position should not move us
+        self.assert_helper(
+            starting_state=0,
+            action=0,
+            ending_state=0,
+            normal_reward=0.0,
+            constraint_reward=self.config["left_reward"],
+        )
+
         # Moving left from second position should move us
-        td = self.env.reset()
-        td["observation"] = torch.tensor([1])
-        td["action"] = torch.tensor(
-            [1, 0, 0, 0]
-        )
-        td = self.env.step(td)
-        self.assertTrue(
-            torch.equal(
-                td["next", "observation"],
-                torch.tensor([0]),
-            ),
-            "Expected {}, got {}".format(torch.tensor([0]), td["next", "observation"]),
-        )
-        self.assertAlmostEqual(
-            td["next", "normal_reward"].item(),
-            0.0,
-            places=3,
-        )
-        self.assertAlmostEqual(
-            td["next", "constraint_reward"].item(),
-            self.config["left_reward"],
-            places=3,
+        self.assert_helper(
+            starting_state=1,
+            action=0,
+            ending_state=0,
+            normal_reward=0.0,
+            constraint_reward=self.config["left_reward"],
         )
 
 
     def test_move_right(self):
         # Moving right from start position should move us
-        td = self.env.reset()
-        td["action"] = torch.tensor(
-            [0, 1, 0, 0]
-        )
-        td = self.env.step(td)
-        self.assertTrue(
-            torch.equal(
-                td["next", "observation"],
-                torch.tensor([1]),
-            )
-        )
-        self.assertAlmostEqual(
-            td["next", "normal_reward"].item(),
-            0.0,
-            places=3,
-        )
-        self.assertAlmostEqual(
-            td["next", "constraint_reward"].item(),
-            self.config["right_reward"],
-            places=3,
+        self.assert_helper(
+            starting_state=0,
+            action=1,
+            ending_state=1,
+            normal_reward=0.0,
+            constraint_reward=self.config["right_reward"],
         )
 
         # Moving right from pre-terminal state should move us and give us the big reward
-        td = self.env.reset()
-        td["observation"] = torch.tensor([self.config["n_states"]-2])
-        td["action"] = torch.tensor(
-            [0, 1, 0, 0]
-        )
-        td = self.env.step(td)
-        self.assertTrue(
-            torch.equal(
-                td["next", "observation"],
-                torch.tensor([self.config["n_states"]-1]),
-            )
-        )
-        self.assertAlmostEqual(
-            td["next", "normal_reward"].item(),
-            self.config["big_reward"],
-            places=3,
-        )
-        self.assertAlmostEqual(
-            td["next", "constraint_reward"].item(),
-            self.config["right_reward"],
-            places=3,
+        self.assert_helper(
+            starting_state=8,
+            action=1,
+            ending_state=9,
+            normal_reward=10.0,
+            constraint_reward=self.config["right_reward"],
         )
 
     def test_move_down(self):
-        # Moving down from the second position should not move us
-        td = self.env.reset()
-        td["observation"] = torch.tensor([1])
-        td["action"] = torch.tensor(
-            [0, 0, 1, 0]
-        )
-        td = self.env.step(td)
-        self.assertTrue(
-            torch.equal(
-                td["next", "observation"],
-                torch.tensor([1]),
-            )
-        )
-        self.assertAlmostEqual(
-            td["next", "normal_reward"].item(),
-            0.0,
-            places=3,
-        )
-        self.assertAlmostEqual(
-            td["next", "constraint_reward"].item(),
-            self.config["down_reward"],
-            places=3,
+        # Moving down from state 4 should not move us
+        self.assert_helper(
+            starting_state=4,
+            action=2,
+            ending_state=4,
+            normal_reward=0.0,
+            constraint_reward=self.config["down_reward"],
         )
 
-        # Moving down from the third position should move us to the starting position
-        td = self.env.reset()
-        td["observation"] = torch.tensor([2])
-        td["action"] = torch.tensor(
-            [0, 0, 1, 0]
-        )
-        td = self.env.step(td)
-        self.assertTrue(
-            torch.equal(
-                td["next", "observation"],
-                torch.tensor([0]),
-            )
-        )
-        self.assertAlmostEqual(
-            td["next", "normal_reward"].item(),
-            0.0,
-            places=3,
-        )
-        self.assertAlmostEqual(
-            td["next", "constraint_reward"].item(),
-            self.config["down_reward"],
-            places=3,
+        # Moving down from state 5 should take us to state 3
+        self.assert_helper(
+            starting_state=5,
+            action=2,
+            ending_state=3,
+            normal_reward=0.0,
+            constraint_reward=self.config["down_reward"],
         )
 
-        # Moving down from the pre-terminal position should move us backwards by the shortcut steps
-        td = self.env.reset()
-        td["observation"] = torch.tensor([self.config["n_states"]-2])
-        td["action"] = torch.tensor(
-            [0, 0, 1, 0]
-        )
-        td = self.env.step(td)
-        self.assertTrue(
-            torch.equal(
-                td["next", "observation"],
-                torch.tensor([self.config["n_states"]-2-self.config["shortcut_steps"]]),
-            )
-        )
-        self.assertAlmostEqual(
-            td["next", "normal_reward"].item(),
-            0.0,
-            places=3,
-        )
-        self.assertAlmostEqual(
-            td["next", "constraint_reward"].item(),
-            self.config["down_reward"],
-            places=3,
+        # Moving down from state 6 should take us to state 3
+        self.assert_helper(
+            starting_state=6,
+            action=2,
+            ending_state=3,
+            normal_reward=0.0,
+            constraint_reward=self.config["down_reward"],
         )
 
     def test_move_up(self):
-        # Moving up from the pre-terminal position should not move us
-        td = self.env.reset()
-        td["observation"] = torch.tensor([self.config["n_states"]-2])
-        td["action"] = torch.tensor(
-            [0, 0, 0, 1]
-        )
-        td = self.env.step(td)
-        self.assertTrue(
-            torch.equal(
-                td["next", "observation"],
-                torch.tensor([self.config["n_states"]-2]),
-            )
-        )
-        self.assertAlmostEqual(
-            td["next", "normal_reward"].item(),
-            0.0,
-            places=3,
-        )
-        self.assertAlmostEqual(
-            td["next", "constraint_reward"].item(),
-            self.config["up_reward"],
-            places=3,
+        # Moving up from state 5 should not move us
+        self.assert_helper(
+            starting_state=5,
+            action=3,
+            ending_state=5,
+            normal_reward=0.0,
+            constraint_reward=self.config["up_reward"],
         )
 
-        # Moving up from the pre-pre-terminal state should move us to the terminal state and give a big reward
-        td = self.env.reset()
-        td["observation"] = torch.tensor([self.config["n_states"]-3])
-        td["action"] = torch.tensor(
-            [0, 0, 0, 1]
-        )
-        td = self.env.step(td)
-        self.assertTrue(
-            torch.equal(
-                td["next", "observation"],
-                torch.tensor([self.config["n_states"]-1]),
-            )
-        )
-        self.assertAlmostEqual(
-            td["next", "normal_reward"].item(),
-            self.config["big_reward"],
-            places=3,
-        )
-        self.assertAlmostEqual(
-            td["next", "constraint_reward"].item(),
-            self.config["up_reward"],
-            places=3,
+        # Moving up from state 4 should move us to state 6
+        self.assert_helper(
+            starting_state=4,
+            action=3,
+            ending_state=6,
+            normal_reward=0.0,
+            constraint_reward=self.config["up_reward"],
         )
 
-        # Moving up from the first position should move us forwards by the shortcut steps
-        td = self.env.reset()
-        td["observation"] = torch.tensor([0])
-        td["action"] = torch.tensor(
-            [0, 0, 0, 1]
+        # Moving up from state 3 should take us to state 6
+        self.assert_helper(
+            starting_state=3,
+            action=3,
+            ending_state=6,
+            normal_reward=0.0,
+            constraint_reward=self.config["up_reward"],
         )
-        td = self.env.step(td)
-        self.assertTrue(
-            torch.equal(
-                td["next", "observation"],
-                torch.tensor([self.config["shortcut_steps"]]),
-            )
+
+        # Moving up from state 8 should not move us
+        self.assert_helper(
+            starting_state=8,
+            action=3,
+            ending_state=8,
+            normal_reward=0.0,
+            constraint_reward=self.config["up_reward"],
         )
-        self.assertAlmostEqual(
-            td["next", "normal_reward"].item(),
-            0.0,
-            places=3,
-        )
-        self.assertAlmostEqual(
-            td["next", "constraint_reward"].item(),
-            self.config["up_reward"],
-            places=3,
+
+        # Moving up from state 7 should move us and give a big reward
+        self.assert_helper(
+            starting_state=7,
+            action=3,
+            ending_state=9,
+            normal_reward=10.0,
+            constraint_reward=self.config["up_reward"],
         )
 
     def test_slow_return(self):
