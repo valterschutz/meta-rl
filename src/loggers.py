@@ -41,7 +41,8 @@ class ToyTabularQLogger(Logger):
         self.history["qvalues"] = []
         self.history["epsilon"] = []
 
-        self.optimal_qvalues = self.env.calc_optimal_qvalues()
+        self.optimal_non_constrained_qvalues = self.env.calc_optimal_qvalues(constraints_active=False)
+        self.optimal_constrained_qvalues = self.env.calc_optimal_qvalues(constraints_active=True)
 
 
     def train_log(self, td):
@@ -53,7 +54,8 @@ class ToyTabularQLogger(Logger):
         wandb.log({
             "batch": self.batch_count,
             "mean qvalue": self.agent.qvalues[:-1].mean().item(),
-            "mean qvalue optimal offset": (self.agent.qvalues[:-1] - self.optimal_qvalues[:-1]).mean().item(),
+            "mean qvalue non-constrained optimal offset": (self.agent.qvalues[:-1] - self.optimal_non_constrained_qvalues[:-1]).mean().item(),
+            "mean qvalue constrained optimal offset": (self.agent.qvalues[:-1] - self.optimal_constrained_qvalues[:-1]).mean().item(),
             "state distribution": wandb.Histogram(td["next", "observation"].cpu()),
             "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()),
             "preferred actions according to qvalues": wandb.Histogram(self.agent.qvalues[:-1].argmax(dim=-1).cpu()),
