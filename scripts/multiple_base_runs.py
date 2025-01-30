@@ -20,7 +20,7 @@ from torchrl.envs.transforms import Compose, StepCounter, DoubleToFloat, Transfo
 
 def get_env(env_config):
 
-    x, y = ToyEnv.calculate_xy(n_states=env_config["n_states"], shortcut_steps=env_config["shortcut_steps"], return_x=env_config["return_x"], return_y=env_config["return_y"], big_reward=env_config["big_reward"], punishment=0, gamma=env_config["env_gamma"])
+    x, y = ToyEnv.calculate_xy(n_states=env_config["n_states"], shortcut_steps=env_config["shortcut_steps"], return_x=env_config["return_x"], return_y=env_config["return_y"], big_reward=env_config["big_reward"], gamma=env_config["env_gamma"])
 
     env = ToyEnv(
         left_reward=x,
@@ -122,11 +122,11 @@ def main():
     wandb.init(project="toy-base")
 
     env_config = {}
-    env_config["n_states"] = 10
+    env_config["n_states"] = 16
     env_config["device"] = torch.device("cpu")
     env_config["env_gamma"] = 0.99
     env_config["max_steps"] = 10*env_config["n_states"]
-    env_config["shortcut_steps"] = 2
+    env_config["shortcut_steps"] = 3
     env_config["big_reward"] = 10
     env_config["return_x"] = 5
     env_config["return_y"] = 1

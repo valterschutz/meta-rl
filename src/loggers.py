@@ -2,6 +2,7 @@ import wandb
 import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
+import numpy as np
 from utils import calc_return
 from typing import Dict, List, Any, Protocol
 from tensordict import TensorDict
@@ -9,6 +10,7 @@ from tensordict.tensordict import TensorDictBase
 
 class Logger(Protocol):
     """
+    Interface for loggers, used by OffpolicyTrainer
     """
 
     def train_log(self, td: TensorDictBase) -> None:
@@ -29,7 +31,7 @@ class Logger(Protocol):
         """
         ...
 
-class ToyTabularQLogger:
+class ToyTabularQLogger(Logger):
     def __init__(self, env, agent):
         self.env = env
         self.agent = agent
@@ -55,11 +57,12 @@ class ToyTabularQLogger:
                     })
                     td = self.env.step(td)
                     old_Q = qvalues[state, action].item()
-                    if td["next", "normal_reward"] != 0:
-                        pass
+                    # if td["next", "normal_reward"] != 0:
+                    #     pass
                     qvalues[state, action] = td["next", "normal_reward"] + self.env.gamma * qvalues[td["next", "observation"], :].max()
                     delta = max(delta, abs(old_Q - qvalues[state, action].item()))
                     # print(delta)
+        print(qvalues)
         return qvalues
 
     def train_log(self, td):
@@ -75,6 +78,7 @@ class ToyTabularQLogger:
             "mean qvalue optimal offset": (self.agent.qvalues[:-1] - self.optimal_qvalues[:-1]).mean().item(),
             "state distribution": wandb.Histogram(td["next", "observation"].cpu()),
             "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()),
+            "preferred actions according to qvalues": wandb.Histogram(self.agent.qvalues[:-1].argmax(dim=-1).cpu()),
             "mean td error": self.agent.latest_td_errors.mean().item(),
             "mean normal reward": td["next", "normal_reward"].mean().item(),
             # "distance to slow policy": self.get_distance_to_slow_policy(),
@@ -86,10 +90,13 @@ class ToyTabularQLogger:
 
     def eval_log(self, td):
         fig, axs = plt.subplots(1, 3)
+        fig.subplots_adjust(wspace=0.5)
         p0 = axs[0].imshow(self.agent.qvalues[:-1])
+        axs[0].set_yticks(np.arange(self.agent.qvalues.shape[0]-1), self.agent.qvalues[:-1].argmax(dim=-1).numpy())
         axs[0].set_title("Agent Q values")
         fig.colorbar(p0, ax=axs[0])
         p1 = axs[1].imshow(self.optimal_qvalues[:-1])
+        axs[1].set_yticks(np.arange(self.optimal_qvalues.shape[0]-1), self.optimal_qvalues[:-1].argmax(dim=-1).numpy())
         axs[1].set_title("Optimal Q values")
         fig.colorbar(p1, ax=axs[1])
         p2 = axs[2].imshow(self.agent.qvalues[:-1]-self.optimal_qvalues[:-1])

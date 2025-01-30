@@ -990,20 +990,25 @@ def slow_policy(td):
 
 
 def fast_policy(td):
-    # Always go up in even states, otherwise go right
-    state_idx = td["state"].argmax(dim=-1)
-    if state_idx % 2 == 0:
-        td["action"] = torch.tensor([0, 0, 0, 1], device=td.device)
-    else:
-        td["action"] = torch.tensor([0, 1, 0, 0], device=td.device)
+    # Always go up
+    td["action"] = torch.tensor([0, 0, 0, 1], device=td.device)
     return td
 
 class Agent(Protocol):
+    """
+    Interface for agents used by OffpolicyTrainer
+    """
     def process_batch(self, td, constraints_active):
+        """
+        Update agent's beliefs using one batch of data.
+        """
         ...
 
     @property
     def min_buffer_size(self) -> int:
+        """
+        Minimum buffer size before training can begin.
+        """
         ...
 
     @property
@@ -1023,9 +1028,6 @@ class ToyTabularQAgent(Agent):
         self.lr = lr
         self.epsilon = epsilon
         self.min_buffer_size
-
-        # self._train_policy = TensorDictModule(lambda obs: self.train_policy_fn(obs), in_keys=["observation"], out_keys=["action"])
-        # self._eval_policy = TensorDictModule(lambda obs: self.eval_policy_fn(obs), in_keys=["observation"], out_keys=["action"])
 
         self.replay_buffer = TensorDictReplayBuffer(
             storage=LazyTensorStorage(max_size=replay_buffer_size, device=self.device),

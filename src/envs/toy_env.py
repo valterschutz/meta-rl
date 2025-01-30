@@ -28,7 +28,7 @@ class ToyEnv(EnvBase):
     ):
         super().__init__(device=device, batch_size=[])
 
-        assert (n_states-2) % shortcut_steps == 0, "n_states must be 2 more than a multiple of shortcut_steps"
+        assert (n_states-1) % shortcut_steps == 0, "n_states must be 1 more than a multiple of shortcut_steps"
         self.left_reward = left_reward
         self.right_reward = right_reward
         self.down_reward = down_reward
@@ -124,56 +124,55 @@ class ToyEnv(EnvBase):
         down_action = 2
         up_action = 3
 
-        # Left action
-        next_state = torch.where(action == left_action, state - 1, next_state)
-        constraint_reward = torch.where(
-            action == left_action, 1 * self.left_reward, constraint_reward
-        )
-        # Right action
-        next_state = torch.where(action == right_action, state + 1, next_state)
-        constraint_reward = torch.where(
-            action == right_action, 1 * self.right_reward, constraint_reward
-        )
+        # A dictionary describing where each action is possible and what rewards it gives
+        d = {
+            left_action: {
+                "mask": action == left_action,
+                "state_change": -1,
+                "constraint_reward": 1 * self.left_reward,
+            },
+            right_action: {
+                "mask": action == right_action,
+                "state_change": 1,
+                "constraint_reward": 1 * self.right_reward,
+            },
+            down_action: {
+                # Allowing down jumps from the second state would create two actions that lead to the same state, which we don't want
+                "mask": action == down_action and state > 1,
+                "state_change": -self.shortcut_steps,
+                "constraint_reward": 1 * self.down_reward,
+            },
+            up_action: {
+                # Allowing up jumps from the pre-final state would create two actions that lead to the same state, which we don't want
+                "mask": action == up_action and state < self.n_states-2,
+                "state_change": self.shortcut_steps,
+                "constraint_reward": 1 * self.up_reward,
+            },
+        }
+        action_dict = d[action.item()]
 
-        # Down action
+        # for action, action_dict in d.items():
+        # Bound the next state between 0 and n_states-1
         next_state = torch.where(
-            action == down_action, state - self.shortcut_steps, next_state
+            action_dict["mask"],
+            torch.clip(next_state+action_dict["state_change"], 0, self.n_states-1),
+            next_state
         )
-        constraint_reward = torch.where(
-            action == down_action, 1 * self.down_reward, constraint_reward
-        )
-        # Up action
-        next_state = torch.where(
-            action == up_action, state + self.shortcut_steps, next_state
-        )
-        constraint_reward = torch.where(
-            action == up_action, 1 * self.up_reward, constraint_reward
-        )
-
-        # Ensure that we can never move past the end pos
-        next_state = torch.where(
-            next_state >= self.n_states, self.n_states - 1, next_state
-        )
-
-        # Ensure that we can never move before the start pos
-        next_state = torch.where(next_state < 0, -next_state, next_state)
+        # constraint_reward = torch.where(
+        #     action_dict["mask"], action_dict["constraint_reward"], constraint_reward
+        # )
+        # We always add the constraint reward, even if we don't move
+        constraint_reward = torch.tensor([action_dict["constraint_reward"]], device=self.device)
 
         done = torch.zeros_like(state, dtype=torch.bool, device=self.device)
 
-        # Big reward for reaching the end pos, overriding the possible constraints
+        # Big reward for reaching the end pos, additive with normal reward
         normal_reward = torch.where(
             next_state == self.n_states - 1, self.big_reward, normal_reward
         )
-        constraint_reward = torch.where(
-            next_state == self.n_states - 1, 0, constraint_reward
-        )
         # If we reach final pos, we're done
-        done = torch.where(next_state == self.n_states - 1, 1.0, done).to(torch.bool)
-
-        # next_state = (
-        #     F.one_hot(next_state, num_classes=self.n_states)
-        #     .to(self.device)
-        # )
+        # TODO: convert to bool?
+        done = torch.where(next_state == self.n_states - 1, True, done)
 
         # For some reason, rewards have to have one dimension less
         normal_reward = normal_reward.squeeze(-1)
@@ -199,11 +198,10 @@ class ToyEnv(EnvBase):
         return out
 
     @staticmethod
-    def calculate_xy(n_states, shortcut_steps, return_x, return_y, big_reward, punishment, gamma):
-        # Assuming n_pos is even, calculate x and y
-        assert (n_states-2) % shortcut_steps == 0, "n_states must be 2 more than a multiple of shortcut_steps"
-        nx = n_states - 2 # Number of times we need to step 'right' to reach the end, excluding the final state
-        ny = (n_states - 2) // shortcut_steps # Number of times we need to step 'up' to reach the end, excluding the final state
-        x = (return_x - big_reward * gamma**nx) / sum(gamma**k for k in range(0, nx)) - punishment
-        y = (return_y - big_reward * gamma**ny) / sum(gamma**k for k in range(0, ny)) - punishment
+    def calculate_xy(n_states, shortcut_steps, return_x, return_y, big_reward, gamma):
+        assert (n_states-1) % shortcut_steps == 0, "n_states must be 1 more than a multiple of shortcut_steps"
+        nx = n_states - 1 # Number of times we need to step 'right' to reach the end
+        ny = (n_states - 1) // shortcut_steps # Number of times we need to step 'up' to reach the end
+        x = (return_x - big_reward * gamma**(nx-1)) / sum(gamma**k for k in range(0, nx))
+        y = (return_y - big_reward * gamma**(ny-1)) / sum(gamma**k for k in range(0, ny))
         return x, y
