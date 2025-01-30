@@ -9,10 +9,11 @@ from torchrl.envs.utils import check_env_specs
 
 
 class ToyEnv(EnvBase):
+    batch_locked = False
 
     def __init__(
         self,
-        batch_size,
+        # batch_size,
         left_reward,
         right_reward,
         down_reward,
@@ -27,7 +28,7 @@ class ToyEnv(EnvBase):
         seed=None,
         device="cpu",
     ):
-        super().__init__(device=device, batch_size=batch_size)
+        super().__init__(device=device, batch_size=())
 
         assert (n_states-1) % shortcut_steps == 0, "n_states must be 1 more than a multiple of shortcut_steps"
         self.left_reward = left_reward
@@ -54,23 +55,23 @@ class ToyEnv(EnvBase):
     def _make_spec(self):
         self.observation_spec = Composite(
             # There does not seem to be a "BoundedDiscrete" class, so we use the unbounded one
-            observation=UnboundedDiscrete(shape=(*self.batch_size, 1), dtype=torch.long),
-            normal_reward=UnboundedContinuous(shape=(*self.batch_size, 1), dtype=torch.float32),
-            constraint_reward=UnboundedContinuous(shape=(*self.batch_size,1), dtype=torch.float32),
-            shape=self.batch_size,
+            observation=UnboundedDiscrete(shape=(1,), dtype=torch.long),
+            normal_reward=UnboundedContinuous(shape=(1,), dtype=torch.float32),
+            constraint_reward=UnboundedContinuous(shape=(1,), dtype=torch.float32),
+            shape=(),
         )
         self.state_spec = Composite(
-            observation=UnboundedDiscrete(shape=(*self.batch_size,1), dtype=torch.long),
-            shape=self.batch_size,
+            observation=UnboundedDiscrete(shape=(1,), dtype=torch.long),
+            shape=(),
         )
 
-        self.action_spec = OneHot(4, shape=(*self.batch_size,4), dtype=torch.long)
+        self.action_spec = OneHot(4, shape=(4,), dtype=torch.long)
         # The sum of normal_reward and constraint_reward
-        self.reward_spec = UnboundedContinuous(shape=(*self.batch_size,1), dtype=torch.float32)
+        self.reward_spec = UnboundedContinuous(shape=(1,), dtype=torch.float32)
 
     def _reset(self, td):
         if td is None or td.is_empty():
-            batch_size = self.batch_size
+            batch_size = ()
         else:
             batch_size = td.shape
 
@@ -211,23 +212,20 @@ class ToyEnv(EnvBase):
 
     def calc_optimal_qvalues(self):
         qvalues = torch.zeros(self.n_states, self.n_actions)
+        states = torch.arange(self.n_states-1).repeat(self.n_actions)
+        actions = torch.arange(self.n_actions).repeat_interleave(self.n_states-1)
+        td = TensorDict({
+            "observation": states.unsqueeze(-1),
+            "action": F.one_hot(actions, num_classes=self.n_actions),
+            }, batch_size=((self.n_states-1)*self.n_actions,)
+        )
+        td = self.step(td)
         delta = 1
         while delta > 1e-4:
-            delta = 0
-            for state in range(self.n_states-1):
-                for action in range(self.n_actions):
-                    td = TensorDict({
-                        "observation": torch.tensor([state]),
-                        "action": F.one_hot(torch.tensor(action), num_classes=self.n_actions),
-                        # "step_count": torch.zeros(1),
-                    })
-                    td = self.step(td)
-                    old_Q = qvalues[state, action].item()
-                    # if td["next", "normal_reward"] != 0:
-                    #     pass
-                    qvalues[state, action] = td["next", "normal_reward"] + self.gamma * qvalues[td["next", "observation"], :].max()
-                    delta = max(delta, abs(old_Q - qvalues[state, action].item()))
-                    # print(delta)
+            old_Q = qvalues.clone()
+            qvalues[states, actions] = td["next", "normal_reward"].squeeze(-1) + self.gamma * qvalues[td["next", "observation"].squeeze(-1), :].max(dim=-1).values
+            delta = (qvalues - old_Q).abs().max().item()
+            print(delta)
         return qvalues
 
 from collections import defaultdict

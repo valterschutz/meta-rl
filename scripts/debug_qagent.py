@@ -1,4 +1,5 @@
 from tensordict import TensorDict
+import matplotlib.pyplot as plt
 import os
 import sys
 import pickle
@@ -40,13 +41,13 @@ def get_env(env_config):
         seed=None,
         device=env_config["device"])
 
-    env = TransformedEnv(
-        env,
-        Compose(
-            StepCounter(max_steps=env_config["max_steps"]),
-            # DTypeCastTransform(dtype_in=torch.long, dtype_out=torch.float32, in_keys=["observation"]),
-        )
-    )
+    # env = TransformedEnv(
+    #     env,
+    #     Compose(
+    #         StepCounter(max_steps=env_config["max_steps"]),
+    #         # DTypeCastTransform(dtype_in=torch.long, dtype_out=torch.float32, in_keys=["observation"]),
+    #     )
+    # )
 
     return env
 
@@ -102,12 +103,16 @@ def main():
     td = TensorDict({
         "observation": states.unsqueeze(-1),
         "action": F.one_hot(actions, num_classes=4),
-    }, batch_size=n_states*n_actions)
+    }, batch_size=(n_states*n_actions,))
     td = env.step(td)
 
-    # Now give this batch to the agent and see if the qvalues are updated correctly
-    for i in range(100):
+    optimal_qvalues = env.calc_optimal_qvalues()
+    errors = []
+    for i in range(1000):
         agent.process_batch(td, constraints_active=False)
+        errors.append((agent.qvalues - optimal_qvalues).abs().sum().item())
+    plt.plot(errors)
+    plt.show()
 
 
 if __name__ == "__main__":

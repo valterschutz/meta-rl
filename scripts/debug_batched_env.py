@@ -15,8 +15,6 @@ from agents.base_agents import fast_policy, slow_policy
 
 def main():
     env = ToyEnv(
-        # batch_size=(16*4,),
-        batch_size=(1,),
         left_reward=-1,
         right_reward=-1,
         down_reward=-3,
@@ -33,9 +31,9 @@ def main():
     )
     check_env_specs(env)
 
-    td = env.reset()
-    # td["observation"] = torch.arange(16).repeat(4).unsqueeze(-1)
-    td["observation"] = torch.tensor([1]).unsqueeze(-1)
+    td = TensorDict({
+        "observation": torch.arange(16).repeat(4).unsqueeze(-1)
+    }, batch_size=(16*4,))
     td = fast_policy(td)
     td = env.step(td)
 
