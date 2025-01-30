@@ -250,50 +250,23 @@ from torchrl.envs.utils import check_env_specs, step_mdp
 def angle_normalize(x):
     return ((x + torch.pi) % (2 * torch.pi)) - torch.pi
 
-DEFAULT_X = np.pi
-DEFAULT_Y = 1.0
+DEFAULT_X = 0
+DEFAULT_Y = 0
 
 class WorkingEnv(EnvBase):
 
-    batch_locked = False
+    batch_locked = True
 
-    def __init__(self, td_params=None, seed=None, device="cpu"):
+    def __init__(self, batch_size, seed=None, device="cpu"):
 
-        if td_params is None:
-            td_params = self.gen_params()
+        super().__init__(device=device, batch_size=batch_size)
 
-        super().__init__(device=device, batch_size=[])
+        self._make_spec()
 
-        self._make_spec(td_params)
         if seed is None:
             seed = torch.empty((), dtype=torch.int64).random_().item()
         self.set_seed(seed)
 
-
-    @staticmethod
-    def gen_params(g=10.0, batch_size=None) -> TensorDictBase:
-        """Returns a ``tensordict`` containing the physical parameters such as gravitational force and torque or speed limits."""
-        if batch_size is None:
-            batch_size = []
-        td = TensorDict(
-            {
-                "params": TensorDict(
-                    {
-                        "max_speed": 8,
-                        "max_torque": 2.0,
-                        "dt": 0.05,
-                        "g": g,
-                        "m": 1.0,
-                        "l": 1.0,
-                    },
-                    [],
-                )
-            },
-            [],
-        )
-        if batch_size:
-            td = td.expand(batch_size).contiguous()
-        return td
 
     @staticmethod
     def _step(tensordict):
@@ -305,7 +278,6 @@ class WorkingEnv(EnvBase):
             {
                 "th": th,
                 "thdot": thdot,
-                # "params": tensordict["params"],
                 "reward": reward,
                 "done": done,
             },
@@ -313,59 +285,41 @@ class WorkingEnv(EnvBase):
         )
         return out
 
-    def _reset(self, tensordict):
-        if tensordict is None or tensordict.is_empty():
-            # if no ``tensordict`` is passed, we generate a single set of hyperparameters
-            # Otherwise, we assume that the input ``tensordict`` contains all the relevant
-            # parameters to get started.
-            tensordict = self.gen_params(batch_size=self.batch_size)
-
-        high_th = torch.tensor(DEFAULT_X, device=self.device)
-        high_thdot = torch.tensor(DEFAULT_Y, device=self.device)
-        low_th = -high_th
-        low_thdot = -high_thdot
-
-        # for non batch-locked environments, the input ``tensordict`` shape dictates the number
-        # of simulators run simultaneously. In other contexts, the initial
-        # random state's shape will depend upon the environment batch-size instead.
-        th = (
-            torch.rand(tensordict.shape, generator=self.rng, device=self.device)
-            * (high_th - low_th)
-            + low_th
-        )
-        thdot = (
-            torch.rand(tensordict.shape, generator=self.rng, device=self.device)
-            * (high_thdot - low_thdot)
-            + low_thdot
-        )
+    def _reset(self, td):
+        if td is None:
+            batch_size = self.batch_size
+        else:
+            batch_size = td.shape
+        # th = torch.zeros(self.batch_size, 1)
+        th = torch.zeros(*batch_size, 1)
+        # thdot = torch.zeros(self.batch_size, 1)
+        thdot = torch.zeros(*batch_size, 1)
         out = TensorDict(
             {
                 "th": th,
                 "thdot": thdot,
             },
-            batch_size=tensordict.shape,
+            # batch_size=self.batch_size
+            batch_size=batch_size
         )
         return out
 
-    def _make_spec(self, td_params):
+    def _make_spec(self):
         # Under the hood, this will populate self.output_spec["observation"]
         self.observation_spec = Composite(
             th=Bounded(
                 low=-torch.pi,
                 high=torch.pi,
-                shape=(),
+                shape=(*self.batch_size, 1),
                 dtype=torch.float32,
             ),
             thdot=Bounded(
-                low=-td_params["params", "max_speed"],
-                high=td_params["params", "max_speed"],
-                shape=(),
+                low=0,
+                high=0,
+                shape=(*self.batch_size, 1),
                 dtype=torch.float32,
             ),
-            # we need to add the ``params`` to the observation specs, as we want
-            # to pass it at each step during a rollout
-            # params=make_composite_from_td(td_params["params"]),
-            shape=(),
+            shape=self.batch_size,
         )
         # since the environment is stateless, we expect the previous output as input.
         # For this, ``EnvBase`` expects some state_spec to be available
@@ -373,28 +327,13 @@ class WorkingEnv(EnvBase):
         # action-spec will be automatically wrapped in input_spec when
         # `self.action_spec = spec` will be called supported
         self.action_spec = Bounded(
-            low=-td_params["params", "max_torque"],
-            high=td_params["params", "max_torque"],
-            shape=(1,),
+            low=0,
+            high=0,
+            shape=(*self.batch_size,1),
             dtype=torch.float32,
         )
-        self.reward_spec = Unbounded(shape=(*td_params.shape, 1))
+        self.reward_spec = Unbounded(shape=(*self.batch_size,1))
 
     def _set_seed(self, seed: Optional[int]):
         rng = torch.manual_seed(seed)
         self.rng = rng
-
-
-def make_composite_from_td(td):
-    # custom function to convert a ``tensordict`` in a similar spec structure
-    # of unbounded values.
-    composite = Composite(
-        {
-            key: make_composite_from_td(tensor)
-            if isinstance(tensor, TensorDictBase)
-            else Unbounded(dtype=tensor.dtype, device=tensor.device, shape=tensor.shape)
-            for key, tensor in td.items()
-        },
-        shape=td.shape,
-    )
-    return composite
