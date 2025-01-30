@@ -23,6 +23,7 @@ class TestToyEnv(unittest.TestCase):
     """
     def setUp(self):
         self.config = {
+            "batch_size": (1,),
             "n_states": 10,
             "shortcut_steps": 3,
             "return_x": 2,
@@ -55,6 +56,7 @@ class TestToyEnv(unittest.TestCase):
             down_reward=self.config["down_reward"],
             up_reward=self.config["up_reward"],
             n_states=self.config["n_states"],
+            batch_size=self.config["batch_size"],
             shortcut_steps=self.config["shortcut_steps"],
             big_reward=self.config["big_reward"],
             punishment=self.config["punishment"],
@@ -68,8 +70,8 @@ class TestToyEnv(unittest.TestCase):
         Asserts that starting in the starting_state and taking the action results in the ending_state, normal_reward, and constraint_reward.
         """
         td = self.env.reset()
-        td["observation"] = torch.tensor([starting_state])
-        td["action"] = F.one_hot(torch.tensor([action]), num_classes=4)
+        td["observation"] = torch.tensor([starting_state]).unsqueeze(0)
+        td["action"] = F.one_hot(torch.tensor([action]), num_classes=4).unsqueeze(0)
         td = self.env.step(td)
         self.assertEqual(
             td["next", "observation"].item(),

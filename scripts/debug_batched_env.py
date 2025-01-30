@@ -7,19 +7,11 @@ import pickle
 
 from torchrl.envs.utils import check_env_specs
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "../src/envs"))
+sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
+sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
 
-from toy_env import WorkingEnv, ToyEnv
-
-# def main():
-#     env = WorkingEnv(batch_size=(7,))
-#     check_env_specs(env)
-
-#     # Create a batch of data
-#     td = env.reset()
-#     td["th"] = torch.ones_like(td["th"]) * 0.5
-#     td["thdot"] = torch.ones_like(td["thdot"])
-#     td = env.step(td)
+from envs.toy_env import WorkingEnv, ToyEnv
+from agents.base_agents import fast_policy
 
 def main():
     env = ToyEnv(
@@ -38,18 +30,12 @@ def main():
         seed=None,
         device="cpu"
     )
-    # check_env_specs(env)
+    check_env_specs(env)
 
-    # Create a batch of data
-    # td = TensorDict({
-    #     "th": torch.tensor([1.0, 2.0, 3.0]),
-    #     "thdot": torch.tensor([0.0, 0.0, 0.0]),
-    # })
     td = env.reset()
     td["observation"] = torch.arange(16).repeat(4).unsqueeze(-1)
-    td["action"] = F.one_hot(torch.arange(4).repeat_interleave(16), num_classes=4)
+    td = fast_policy(td)
     td = env.step(td)
-    print("hello")
 
 if __name__ == "__main__":
     main()

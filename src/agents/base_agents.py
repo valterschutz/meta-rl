@@ -47,7 +47,11 @@ from tqdm import tqdm
 
 import wandb
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "./"))
+file_name = os.path.dirname(__file__)
+path = os.path.join(file_name, "../")
+# print(f"file_name: {file_name}")
+# print(f"path: {path}")
+sys.path.append(path)
 
 from envs.toy_env import ToyEnv
 from utils import calc_return
@@ -985,13 +989,13 @@ class ToyTabularDQNAgent(OffpolicyAgent):
 
 def slow_policy(td):
     # Always go right
-    td["action"] = torch.tensor([0, 1, 0, 0], device=td.device)
+    td["action"] = torch.tensor([0, 1, 0, 0], device=td.device).expand(*td.batch_size, -1)
     return td
 
 
 def fast_policy(td):
     # Always go up
-    td["action"] = torch.tensor([0, 0, 0, 1], device=td.device)
+    td["action"] = torch.tensor([0, 0, 0, 1], device=td.device).expand(*td.batch_size, -1)
     return td
 
 class Agent(Protocol):

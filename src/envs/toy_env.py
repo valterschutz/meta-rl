@@ -253,7 +253,7 @@ class ToyEnv(EnvBase):
 
         out = TensorDict(
             {
-                "observation": next_state,
+                "observation": next_state.unsqueeze(-1),
                 "reward": reward,
                 "normal_reward": normal_reward.unsqueeze(-1),
                 "constraint_reward": constraint_reward.unsqueeze(-1),
