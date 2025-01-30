@@ -12,6 +12,7 @@ class ToyEnv(EnvBase):
 
     def __init__(
         self,
+        batch_size,
         left_reward,
         right_reward,
         down_reward,
@@ -26,7 +27,7 @@ class ToyEnv(EnvBase):
         seed=None,
         device="cpu",
     ):
-        super().__init__(device=device, batch_size=[])
+        super().__init__(device=device, batch_size=batch_size)
 
         assert (n_states-1) % shortcut_steps == 0, "n_states must be 1 more than a multiple of shortcut_steps"
         self.left_reward = left_reward
@@ -45,6 +46,7 @@ class ToyEnv(EnvBase):
         self.constraints_active = constraints_active
 
         self._make_spec()
+
         if seed is None:
             seed = torch.empty((), dtype=torch.int64).random_().item()
         self.set_seed(seed)
@@ -52,32 +54,32 @@ class ToyEnv(EnvBase):
     def _make_spec(self):
         self.observation_spec = Composite(
             # There does not seem to be a "BoundedDiscrete" class, so we use the unbounded one
-            observation=UnboundedDiscrete(shape=(1,), dtype=torch.long),
-            normal_reward=UnboundedContinuous(shape=(1,), dtype=torch.float32),
-            constraint_reward=UnboundedContinuous(shape=(1,), dtype=torch.float32),
-            shape=(),
+            observation=UnboundedDiscrete(shape=(*self.batch_size, 1), dtype=torch.long),
+            normal_reward=UnboundedContinuous(shape=(*self.batch_size, 1), dtype=torch.float32),
+            constraint_reward=UnboundedContinuous(shape=(*self.batch_size,1), dtype=torch.float32),
+            shape=self.batch_size,
         )
         self.state_spec = Composite(
-            observation=UnboundedDiscrete(shape=(1,), dtype=torch.long),
-            shape=(),
+            observation=UnboundedDiscrete(shape=(*self.batch_size,1), dtype=torch.long),
+            shape=self.batch_size,
         )
 
-        self.action_spec = OneHot(4, shape=(4,), dtype=torch.long)
+        self.action_spec = OneHot(4, shape=(*self.batch_size,4), dtype=torch.long)
         # The sum of normal_reward and constraint_reward
-        self.reward_spec = UnboundedContinuous(shape=(1,), dtype=torch.float32)
+        self.reward_spec = UnboundedContinuous(shape=(*self.batch_size,1), dtype=torch.float32)
 
     def _reset(self, td):
         if td is None or td.is_empty():
-            batch_shape = ()
+            batch_size = self.batch_size
         else:
-            batch_shape = td.shape
+            batch_size = td.shape
 
         if self.random_start:
             state_indices = torch.randint(
-                0, self.n_states, shape=(*batch_shape, 1), dtype=torch.long, device=self.device
+                0, self.n_states, shape=(*batch_size, 1), dtype=torch.long, device=self.device
             )
         else:
-            state_indices = torch.zeros((*batch_shape, 1), dtype=torch.long, device=self.device)
+            state_indices = torch.zeros((*batch_size, 1), dtype=torch.long, device=self.device)
 
         state = state_indices
         # state = (
@@ -90,13 +92,13 @@ class ToyEnv(EnvBase):
             {
                 "observation": state,
                 "normal_reward": torch.zeros(
-                    batch_shape, dtype=torch.float32, device=self.device
-                ).unsqueeze(-1),
+                    (*batch_size,1), dtype=torch.float32, device=self.device
+                ),
                 "constraint_reward": torch.zeros(
-                    batch_shape, dtype=torch.float32, device=self.device
-                ).unsqueeze(-1),
+                    (*batch_size, 1), dtype=torch.float32, device=self.device
+                )
             },
-            batch_size=batch_shape,
+            batch_size=batch_size,
         )
         return out
 
@@ -105,7 +107,7 @@ class ToyEnv(EnvBase):
         self.rng = rng
 
     def _step(self, td):
-        state = td["observation"]
+        state = td["observation"].squeeze(-1) # Squeeze last dimension to simplify tensor calculations
         action = td["action"]  # Action order: left, right, down, up
         # state = torch.argmax(state, dim=-1)
         action = torch.argmax(action, dim=-1)
@@ -125,42 +127,108 @@ class ToyEnv(EnvBase):
         up_action = 3
 
         # A dictionary describing where each action is possible and what rewards it gives
-        d = {
-            left_action: {
-                "mask": action == left_action,
-                "state_change": -1,
-                "constraint_reward": 1 * self.left_reward,
-            },
-            right_action: {
-                "mask": action == right_action,
-                "state_change": 1,
-                "constraint_reward": 1 * self.right_reward,
-            },
-            down_action: {
-                "mask": action == down_action and (state-1) % self.shortcut_steps != 0,
-                "state_change": -self.shortcut_steps if (state % self.shortcut_steps) == 0 else -(state % self.shortcut_steps),
-                "constraint_reward": 1 * self.down_reward,
-            },
-            up_action: {
-                "mask": action == up_action and (state+1) % self.shortcut_steps != 0,
-                "state_change": (self.shortcut_steps-(state%self.shortcut_steps)),
-                "constraint_reward": 1 * self.up_reward,
-            },
+        # d = [
+        #     {
+        #         "mask": action == left_action,
+        #         "state_change": -1,
+        #         "constraint_reward": 1 * self.left_reward,
+        #     },
+        #     {
+        #         "mask": action == right_action,
+        #         "state_change": 1,
+        #         "constraint_reward": 1 * self.right_reward,
+        #     },
+        #     {
+        #         "mask": (action == down_action) & ((state-1) % self.shortcut_steps != 0),
+        #         "state_change": torch.where(
+        #             (state % self.shortcut_steps) == 0,
+        #             -self.shortcut_steps,
+        #             -(state % self.shortcut_steps),
+        #         ),
+        #         "constraint_reward": 1 * self.down_reward,
+        #     },
+        #     {
+        #         "mask": (action == up_action) & ((state+1) % self.shortcut_steps != 0),
+        #         "state_change": (self.shortcut_steps-(state%self.shortcut_steps)),
+        #         "constraint_reward": 1 * self.up_reward,
+        #     },
+        # ]
+        # Create masks for each action
+        masks = {
+            "left": action == left_action,
+            "right": action == right_action,
+            "down": action == down_action,
+            "up": action == up_action,
         }
-        action_dict = d[action.item()]
+
+        # Compute state changes and rewards for each action
+        state_changes = {
+            "left": -1,
+            "right": 1,
+            # Trying to move down one state after a checkpoint will not move us
+            # Otherwise move to the previous checkpoint
+            "down": torch.where(
+                ((state-1) % self.shortcut_steps) == 0,
+                0,
+                torch.where(
+                    (state % self.shortcut_steps) == 0,
+                    -self.shortcut_steps,
+                    -(state % self.shortcut_steps),
+                )
+            ),
+            # Trying to move up one state before a checkpoint will not move us
+            # Otherwise move to the next checkpoint
+            "up": torch.where(
+                ((state+1) % self.shortcut_steps) == 0,
+                0,
+                self.shortcut_steps - (state % self.shortcut_steps),
+            )
+        }
+
+        constraint_rewards = {
+            "left": self.left_reward,
+            "right": self.right_reward,
+            "down": self.down_reward,
+            "up": self.up_reward,
+        }
+
+        # Apply changes based on action masks
+        for action_name in ["left", "right", "down", "up"]:
+            mask = masks[action_name]
+            next_state = torch.where(
+                mask,
+                torch.clip(next_state + state_changes[action_name], 0, self.n_states - 1),
+                next_state,
+            )
+            constraint_reward = torch.where(
+                mask,
+                constraint_rewards[action_name] * torch.ones_like(constraint_reward),
+                constraint_reward,
+            )
+
+        # for action_dict in d:
+        #     next_state = torch.where(
+        #         action_dict["mask"],
+        #         torch.clip(next_state+action_dict["state_change"], 0, self.n_states-1),
+        #         next_state
+        #     )
+        #     constraint_reward = torch.where(
+        #         action_dict["mask"], action_dict["constraint_reward"], constraint_reward
+        #     )
+        # action_dict = d[action.item()]
 
         # for action, action_dict in d.items():
         # Bound the next state between 0 and n_states-1
-        next_state = torch.where(
-            action_dict["mask"],
-            torch.clip(next_state+action_dict["state_change"], 0, self.n_states-1),
-            next_state
-        )
+        # next_state = torch.where(
+        #     action_dict["mask"],
+        #     torch.clip(next_state+action_dict["state_change"], 0, self.n_states-1),
+        #     next_state
+        # )
         # constraint_reward = torch.where(
         #     action_dict["mask"], action_dict["constraint_reward"], constraint_reward
         # )
         # We always add the constraint reward, even if we don't move
-        constraint_reward = torch.tensor([action_dict["constraint_reward"]], device=self.device)
+        # constraint_reward = torch.tensor([action_dict["constraint_reward"]], device=self.device)
 
         done = torch.zeros_like(state, dtype=torch.bool, device=self.device)
 
