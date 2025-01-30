@@ -210,7 +210,7 @@ class ToyEnv(EnvBase):
         y = (return_y - big_reward * gamma**(ny-1)) / sum(gamma**k for k in range(0, ny))
         return x, y
 
-    def calc_optimal_qvalues(self):
+    def calc_optimal_qvalues(self, constraints_active, tol=1e-6):
         qvalues = torch.zeros(self.n_states, self.n_actions)
         states = torch.arange(self.n_states-1).repeat(self.n_actions)
         actions = torch.arange(self.n_actions).repeat_interleave(self.n_states-1)
@@ -220,12 +220,15 @@ class ToyEnv(EnvBase):
             }, batch_size=((self.n_states-1)*self.n_actions,)
         )
         td = self.step(td)
+        if constraints_active:
+            rewards = td["next","normal_reward"] + td["next", "constraint_reward"]
+        else:
+            rewards = td["next", "normal_reward"]
         delta = 1
-        while delta > 1e-4:
+        while delta > tol:
             old_Q = qvalues.clone()
-            qvalues[states, actions] = td["next", "normal_reward"].squeeze(-1) + self.gamma * qvalues[td["next", "observation"].squeeze(-1), :].max(dim=-1).values
+            qvalues[states, actions] = rewards.squeeze(-1) + self.gamma * qvalues[td["next", "observation"].squeeze(-1), :].max(dim=-1).values
             delta = (qvalues - old_Q).abs().max().item()
-            print(delta)
         return qvalues
 
 from collections import defaultdict

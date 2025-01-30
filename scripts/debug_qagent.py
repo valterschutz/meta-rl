@@ -91,6 +91,8 @@ def main():
     agent_config["rb_batch_size"] = 64
     agent_config["num_optim_steps"] = 1
 
+    constraints_active = False
+
     env = get_env(env_config)
     agent = get_agent(env, agent_config, env_config, None)
 
@@ -98,19 +100,23 @@ def main():
     # States go from 0 to n_states-1 and actions from 0 to 3
     n_states = env_config["n_states"]
     n_actions = 4
-    states = torch.arange(env_config["n_states"]).repeat(n_actions)
-    actions = torch.arange(n_actions).repeat_interleave(n_states)
+    states = torch.arange(env_config["n_states"]-1).repeat(n_actions)
+    actions = torch.arange(n_actions).repeat_interleave(n_states-1)
     td = TensorDict({
         "observation": states.unsqueeze(-1),
         "action": F.one_hot(actions, num_classes=4),
-    }, batch_size=(n_states*n_actions,))
+    }, batch_size=((n_states-1)*n_actions,))
     td = env.step(td)
 
-    optimal_qvalues = env.calc_optimal_qvalues()
+    optimal_qvalues = env.calc_optimal_qvalues(constraints_active=constraints_active)
     errors = []
-    for i in range(1000):
-        agent.process_batch(td, constraints_active=False)
+    for i in range(10_000):
+        agent.process_batch(td, constraints_active=constraints_active)
         errors.append((agent.qvalues - optimal_qvalues).abs().sum().item())
+
+    print(f"Optimal Q-values: {optimal_qvalues}")
+    print(f"Agent's Q-values: {agent.qvalues}")
+    print(f"Q-value errors: {optimal_qvalues - agent.qvalues}")
     plt.plot(errors)
     plt.show()
 

@@ -1055,13 +1055,15 @@ class ToyTabularQAgent(Agent):
         self.update_qvalues(td, constraints_active)
 
     def update_qvalues(self, td, constraints_active):
-        action_indices = td["action"].argmax(dim=-1)
+        observations = td["observation"].squeeze(-1)
+        next_observations = td["next", "observation"].squeeze(-1)
+        actions = td["action"].argmax(dim=-1)
         if constraints_active:
-            rewards = td["next", "normal_reward"]
+            rewards = (td["next", "normal_reward"] + td["next", "constraint_reward"]).squeeze(-1)
         else:
-            rewards = td["next", "normal_reward"] + td["next", "constraint_reward"]
-        td_errors = rewards + self.gamma * self.qvalues[td["next", "observation"]].max(dim=-1)[0] - self.qvalues[td["observation"], action_indices]
-        self.qvalues[td["observation"], action_indices] += self.lr * td_errors
+            rewards = td["next", "normal_reward"].squeeze(-1)
+        td_errors = rewards + self.gamma * self.qvalues[next_observations].max(dim=-1).values - self.qvalues[observations, actions]
+        self.qvalues[observations, actions] += self.lr * td_errors
         self.latest_td_errors = td_errors # For logging purposes
         # td["td_error"] = td_errors.abs()
         # self.replay_buffer.update_tensordict_priority(td)
