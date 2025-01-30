@@ -1,3 +1,4 @@
+from tensordict import TensorDict
 import os
 import sys
 import pickle
@@ -5,6 +6,7 @@ import pickle
 sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
 
 import torch
+import torch.nn.functional as F
 from torch.profiler import profile, record_function, ProfilerActivity
 import numpy as np
 import pandas as pd
@@ -17,6 +19,7 @@ from envs.toy_env import ToyEnv
 
 from torchrl.envs.transforms import Compose, StepCounter, DoubleToFloat, TransformedEnv, DTypeCastTransform
 
+# Figure out why TabularQAgent is not learning properly
 
 def get_env(env_config):
 
@@ -65,37 +68,7 @@ def get_agent(env, agent_config, env_config, collector_config):
 
     return agent
 
-def get_trainer(env_config, agent_config, collector_config):
-    env = get_env(env_config)
-    agent = get_agent(env, agent_config, env_config, collector_config)
-
-    trainer = OffpolicyTrainer(
-        env=env,
-        agent=agent,
-        logger=ToyTabularQLogger(env, agent),
-        progress_bar=True,
-        collector_device=collector_config["device"],
-        max_eval_steps=env_config["max_steps"],
-        collector_args={
-            "batch_size": collector_config["batch_size"],
-            "total_frames": collector_config["total_frames"],
-        },
-        env_gamma=env_config["env_gamma"],
-        eval_env=None
-    )
-    return trainer
-
-def multiple_runs(times_to_train, env_config, agent_config, collector_config, **trainer_kwargs):
-    result_dicts = []
-    for i in range(times_to_train):
-        trainer = get_trainer(env_config, agent_config, collector_config)
-        trainer.train(**trainer_kwargs)
-        result_dicts.append(trainer.logger.dump())
-    return result_dicts
-
 def main():
-    wandb.init(project="toy-base")
-
     env_config = {}
     env_config["n_states"] = 16
     env_config["device"] = torch.device("cpu")
@@ -105,11 +78,6 @@ def main():
     env_config["big_reward"] = 10
     env_config["return_x"] = 5
     env_config["return_y"] = 1
-
-    collector_config = {}
-    collector_config["batch_size"] = 64
-    collector_config["total_frames"] = 1_000_000
-    collector_config["device"] = env_config["device"]
 
     agent_config = {}
     agent_config["agent_gamma"] = env_config["env_gamma"]
@@ -122,15 +90,24 @@ def main():
     agent_config["rb_batch_size"] = 64
     agent_config["num_optim_steps"] = 1
 
-    unconstrained_result_dicts = multiple_runs(times_to_train=1, env_config=env_config, agent_config=agent_config, collector_config=collector_config, when_constraints_active=1.0, times_to_eval=10)
-    # constrained_result_dicts = multiple_runs(times_to_train=1, env_config=env_config, agent_config=agent_config, collector_config=collector_config, when_constraints_active=0.0)
+    env = get_env(env_config)
+    agent = get_agent(env, agent_config, env_config, None)
 
+    # Produce a tensordict that represents the whole dataset
+    # States go from 0 to n_states-1 and actions from 0 to 3
+    n_states = env_config["n_states"]
+    n_actions = 4
+    states = torch.arange(env_config["n_states"]).repeat(n_actions)
+    actions = torch.arange(n_actions).repeat_interleave(n_states)
+    td = TensorDict({
+        "observation": states.unsqueeze(-1),
+        "action": F.one_hot(actions, num_classes=4),
+    }, batch_size=n_states*n_actions)
+    td = env.step(td)
 
-    # Pickle the data
-    # with open("data/unconstrained_result_dicts|2025-01-29|10-states.pkl", "wb") as f:
-    #     pickle.dump(unconstrained_result_dicts, f)
-    # with open("data/constrained_result_dicts|2025-01-29|10-states.pkl", "wb") as f:
-    #     pickle.dump(constrained_result_dicts, f)
+    # Now give this batch to the agent and see if the qvalues are updated correctly
+    for i in range(100):
+        agent.process_batch(td, constraints_active=False)
 
 
 if __name__ == "__main__":
