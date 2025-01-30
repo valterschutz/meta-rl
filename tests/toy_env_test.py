@@ -203,7 +203,7 @@ class TestToyEnv(unittest.TestCase):
 
     def test_slow_return(self):
         """Check if the slow policy returns the expected return"""
-        slow_rollout = self.env.rollout(1000, slow_policy)
+        slow_rollout = self.env.rollout(self.config["max_steps"], slow_policy)
         slow_return = calc_return((slow_rollout["next", "normal_reward"]+slow_rollout["next", "constraint_reward"]).flatten(), self.config["gamma"])
         self.assertAlmostEqual(
             slow_return,
@@ -213,7 +213,7 @@ class TestToyEnv(unittest.TestCase):
 
     def test_fast_return(self):
         """Check if the fast policy returns the expected return"""
-        fast_rollout = self.env.rollout(1000, fast_policy)
+        fast_rollout = self.env.rollout(self.config["max_steps"], fast_policy)
         fast_return = calc_return((fast_rollout["next", "normal_reward"]+fast_rollout["next", "constraint_reward"]).flatten(), self.config["gamma"])
         self.assertAlmostEqual(
             fast_return,
