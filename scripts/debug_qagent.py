@@ -55,7 +55,7 @@ def get_env(env_config):
 def get_agent(env, agent_config, env_config, collector_config):
     agent = ToyTabularQAgent(
         n_states=env_config["n_states"],
-        agent_gamma=agent_config["agent_gamma"],
+        gamma=agent_config["agent_gamma"],
         lr=agent_config["lr"],
         epsilon=agent_config["epsilon"],
         replay_buffer_size=agent_config["replay_buffer_size"],

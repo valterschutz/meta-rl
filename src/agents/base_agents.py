@@ -1025,22 +1025,25 @@ class Agent(Protocol):
         ...
 
 class ToyTabularQAgent(Agent):
-    def __init__(self, n_states, agent_gamma, lr, epsilon, replay_buffer_size, device, rb_alpha, rb_beta, rb_batch_size, num_optim_steps):
-        self.device = device
-        self.qvalues = torch.zeros(n_states, 4).to(device)
-        # self.qvalues[:, 3] = 1
-        self.gamma = agent_gamma
+    def __init__(self, n_states, n_actions, gamma, lr, epsilon, device, replay_buffer_size, rb_alpha, rb_beta, rb_batch_size, num_optim_steps, init_qvalues=0.0):
+        self.n_states = n_states
+        self.n_actions = n_actions
+        self.gamma = gamma
         self.lr = lr
         self.epsilon = epsilon
-        # self.min_buffer_size
+        self.device = device
 
-        # self.replay_buffer = TensorDictReplayBuffer(
-        #     storage=LazyTensorStorage(max_size=replay_buffer_size, device=self.device),
-        #     sampler=PrioritizedSampler(max_capacity=replay_buffer_size, alpha=rb_alpha, beta=rb_beta),
-        #     priority_key="td_error",
-        #     batch_size=rb_batch_size,
-        # )
+        self.replay_buffer = TensorDictReplayBuffer(
+            storage=LazyTensorStorage(max_size=replay_buffer_size, device=self.device),
+            sampler=PrioritizedSampler(max_capacity=replay_buffer_size, alpha=rb_alpha, beta=rb_beta),
+            priority_key="td_error",
+            batch_size=rb_batch_size,
+        )
         self.num_optim_steps = num_optim_steps
+
+        self.qvalues = init_qvalues * torch.ones(n_states, n_actions).to(self.device)
+        # Terminal state must always have value 0
+        self.qvalues[-1] = 0
 
         self._train_policy = TensorDictModule(self.train_policy_fn, in_keys=["observation"], out_keys=["action"])
         self._eval_policy = TensorDictModule(self.eval_policy_fn, in_keys=["observation"], out_keys=["action"])
@@ -1055,16 +1058,16 @@ class ToyTabularQAgent(Agent):
 
     def process_batch(self, td, constraints_active):
         # Add td to replay buffer
-        # data_view = td.reshape(-1)
-        # self.replay_buffer.extend(data_view.to(self.device))
+        data_view = td.reshape(-1)
+        self.replay_buffer.extend(data_view.to(self.device))
 
         # Sample self.num_optim_steps times from the replay buffer
-        # for _ in range(self.num_optim_steps):
-        #     subdata = self.replay_buffer.sample()
-        #     self.update_qvalues(subdata, constraints_active)
+        for _ in range(self.num_optim_steps):
+            subdata = self.replay_buffer.sample()
+            self.update_qvalues(subdata, constraints_active)
 
         # While debugging, ensuring that RB is not the problem
-        self.update_qvalues(td, constraints_active)
+        # self.update_qvalues(td, constraints_active)
 
     def update_qvalues(self, td, constraints_active):
         observations = td["observation"].squeeze(-1)
@@ -1077,41 +1080,23 @@ class ToyTabularQAgent(Agent):
         td_errors = rewards + self.gamma * self.qvalues[next_observations].max(dim=-1).values - self.qvalues[observations, actions]
         self.qvalues[observations, actions] += self.lr * td_errors
         self.latest_td_errors = td_errors # For logging purposes
-        # td["td_error"] = td_errors.abs()
-        # self.replay_buffer.update_tensordict_priority(td)
+        td["td_error"] = td_errors.abs()
+        self.replay_buffer.update_tensordict_priority(td)
 
     def train_policy_fn(self, obs):
         # Epsilon-greedy policy
         if random.random() < self.epsilon:
-            action = torch.randint(4, obs.shape, device=self.device)
+            action = torch.randint(self.n_actions, obs.shape, device=self.device)
         else:
             action = self.qvalues[obs].argmax(-1)
         # Note that we discard the last dimension of obs, since it's always a singleton dimension
         # If obs has shape (B, 1), then we want the action (after one-hot) to have shape (B, 4)
         action = action.squeeze(-1)
-        return F.one_hot(action, num_classes=4)
+        return F.one_hot(action, num_classes=self.n_actions)
 
     def eval_policy_fn(self, obs):
         action = self.qvalues[obs].argmax(-1)
+        # Note that we discard the last dimension of obs, since it's always a singleton dimension
+        # If obs has shape (B, 1), then we want the action (after one-hot) to have shape (B, 4)
         action = action.squeeze(-1)
-        return F.one_hot(action, num_classes=4)
-
-    # @property
-    # def min_buffer_size(self):
-    #     return 0
-
-    # @property
-    # def train_policy(self):
-    #     return self._train_policy
-
-    # def train_policy(self, td):
-    #     td["action"] = self.train_policy_fn(td["observation"])
-    #     return td
-
-    # def eval_policy(self, td):
-    #     td["action"] = self.eval_policy_fn(td["observation"])
-    #     return td
-
-    # @property
-    # def eval_policy(self):
-    #     return self._eval_policy
+        return F.one_hot(action, num_classes=self.n_actions)

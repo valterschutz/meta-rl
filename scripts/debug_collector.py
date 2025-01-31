@@ -34,7 +34,7 @@ def main():
 
     agent = ToyTabularQAgent(
         n_states=16,
-        agent_gamma=0.99,
+        gamma=0.99,
         lr=1e-2,
         epsilon=0.1,
         replay_buffer_size=100,

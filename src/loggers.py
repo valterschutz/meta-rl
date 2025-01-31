@@ -1,3 +1,4 @@
+from collections import defaultdict
 import wandb
 import matplotlib.pyplot as plt
 import torch
@@ -37,43 +38,52 @@ class ToyTabularQLogger(Logger):
         self.agent = agent
         self.batch_count = 0
 
-        self.history = {}
-        self.history["qvalues"] = []
-        self.history["epsilon"] = []
+        self.history = defaultdict(list)
 
         self.optimal_non_constrained_qvalues = self.env.calc_optimal_qvalues(constraints_active=False)
         self.optimal_constrained_qvalues = self.env.calc_optimal_qvalues(constraints_active=True)
 
-        self.optimal_non_constrained_policy = self.optimal_non_constrained_qvalues[:-1].argmax(dim=-1)
-        self.optimal_constrained_policy = self.optimal_constrained_qvalues[:-1].argmax(dim=-1)
+        self.optimal_non_constrained_policy = self.env.calc_optimal_policy(constraints_active=False)
+        self.optimal_constrained_policy = self.env.calc_optimal_policy(constraints_active=True)
 
 
     def train_log(self, td):
         self.batch_count += 1
-        self.history["qvalues"].append(self.agent.qvalues.clone())
-        self.history["epsilon"].append(self.agent.epsilon)
+        # self.history["qvalues"].append(self.agent.qvalues.clone())
+        # self.history["epsilon"].append(self.agent.epsilon)
+        constrained_qvalue_offset = (self.agent.qvalues[:-1] - self.optimal_constrained_qvalues[:-1]).mean().item()
+        non_constrained_qvalue_offset = (self.agent.qvalues[:-1] - self.optimal_non_constrained_qvalues[:-1]).mean().item()
+        self.history["constrained qvalue offset"].append(constrained_qvalue_offset)
+        self.history["non-constrained qvalue offset"].append(non_constrained_qvalue_offset)
 
         policy = self.agent.qvalues[:-1].argmax(dim=-1)
 
+        constrained_policy_offset = (policy - self.optimal_constrained_policy).abs().sum().item()
+        non_constrained_policy_offset = (policy - self.optimal_non_constrained_policy).abs().sum().item()
+        self.history["constrained policy offset"].append(constrained_policy_offset)
+        self.history["non-constrained policy offset"].append(non_constrained_policy_offset)
 
-        wandb.log({
-            "batch": self.batch_count,
-            "mean qvalue": self.agent.qvalues[:-1].mean().item(),
-            "mean qvalue non-constrained optimal offset": (self.agent.qvalues[:-1] - self.optimal_non_constrained_qvalues[:-1]).mean().item(),
-            "mean qvalue constrained optimal offset": (self.agent.qvalues[:-1] - self.optimal_constrained_qvalues[:-1]).mean().item(),
-            "non-constrained policy offset": (policy - self.optimal_non_constrained_policy).abs().sum().item(),
-            "constrained policy offset": (policy - self.optimal_constrained_policy).abs().sum().item(),
-            "state distribution": wandb.Histogram(td["next", "observation"].cpu()),
-            "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()),
-            "preferred actions according to qvalues": wandb.Histogram(self.agent.qvalues[:-1].argmax(dim=-1).cpu()),
-            "mean td error": self.agent.latest_td_errors.mean().item(),
-            "mean normal reward": td["next", "normal_reward"].mean().item(),
-            # "distance to slow policy": self.get_distance_to_slow_policy(),
-            # "distance to fast policy": self.get_distance_to_fast_policy(),
-            # "policy matrix": wandb.Image(self.get_policy_matrix(), "Policy matrix"),
-            # "qvalues": wandb.Image(self.get_qvalues(), "Q values")
-            # "policy matrix and qvalues": wandb.Image(fig, "Policy matrix and Q values")
-        })
+
+        # wandb.log({
+        #     "batch": self.batch_count,
+        #     "qvalue": self.agent.qvalues[:-1].mean().item(),
+        #     "non-constrained qvalue offset": non_constrained_qvalue_offset,
+        #     "constrained qvalue offset": constrained_qvalue_offset,
+        #     "non-constrained policy offset": non_constrained_policy_offset,
+        #     "constrained policy offset": constrained_policy_offset,
+        #     "state distribution": wandb.Histogram(td["next", "observation"].cpu()),
+        #     "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()),
+        #     # "preferred actions according to qvalues": wandb.Histogram(self.agent.qvalues[:-1].argmax(dim=-1).cpu()),
+        #     "td error": self.agent.latest_td_errors.mean().item(),
+        #     "normal reward": td["next", "normal_reward"].mean().item(),
+        #     "constraint reward": td["next", "constraint_reward"].mean().item(),
+        #     "reward": td["next", "reward"].mean().item(),
+        #     # "distance to slow policy": self.get_distance_to_slow_policy(),
+        #     # "distance to fast policy": self.get_distance_to_fast_policy(),
+        #     # "policy matrix": wandb.Image(self.get_policy_matrix(), "Policy matrix"),
+        #     # "qvalues": wandb.Image(self.get_qvalues(), "Q values")
+        #     # "policy matrix and qvalues": wandb.Image(fig, "Policy matrix and Q values")
+        # })
 
     def eval_log(self, td):
         # fig, axs = plt.subplots(1, 3)

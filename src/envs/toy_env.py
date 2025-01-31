@@ -13,28 +13,25 @@ class ToyEnv(EnvBase):
 
     def __init__(
         self,
-        # batch_size,
-        left_reward,
-        right_reward,
-        down_reward,
-        up_reward,
         n_states,
         shortcut_steps,
         big_reward,
-        punishment,
+        punishment, # How much to punish every action, used to encourage the agent to take the shortest path
         gamma,
-        constraints_active,
         random_start=False,
         seed=None,
         device="cpu",
+        left_reward=None,
+        right_reward=None,
+        down_reward=None,
+        up_reward=None,
+        return_x=None,
+        return_y=None
     ):
         super().__init__(device=device, batch_size=())
 
         assert (n_states-1) % shortcut_steps == 0, "n_states must be 1 more than a multiple of shortcut_steps"
-        self.left_reward = left_reward
-        self.right_reward = right_reward
-        self.down_reward = down_reward
-        self.up_reward = up_reward
+
         self.n_states = n_states
         self.shortcut_steps = shortcut_steps
         self.big_reward = big_reward
@@ -44,13 +41,39 @@ class ToyEnv(EnvBase):
 
         self.n_actions = 4
 
-        self.constraints_active = constraints_active
+        self._reward_init(left_reward, right_reward, down_reward, up_reward, return_x, return_y)
 
         self._make_spec()
 
         if seed is None:
             seed = torch.empty((), dtype=torch.int64).random_().item()
         self.set_seed(seed)
+
+    def _reward_init(self, left_reward, right_reward, down_reward, up_reward, return_x, return_y):
+        """
+        Initialize the rewards for the environment. Either supply explicit rewards or calculate them from return_x and return_y.
+        """
+        # If return_x is provided, use it to calculate left_reward and right_reward
+        if return_x is not None:
+            assert left_reward is None and right_reward is None, "Either return_x or left_reward and right_reward must be provided"
+            x = self.calculate_x(self.n_states, self.shortcut_steps, return_x, self.big_reward, self.gamma)
+            left_reward = x
+            right_reward = x
+        else:
+            assert left_reward is not None and right_reward is not None, "Either return_x or left_reward and right_reward must be provided"
+        # If return_y is provided, use it to calculate down_reward and up_reward
+        if return_y is not None:
+            assert down_reward is None and up_reward is None, "Either return_y or down_reward and up_reward must be provided"
+            y = self.calculate_y(self.n_states, self.shortcut_steps, return_y, self.big_reward, self.gamma)
+            down_reward = y
+            up_reward = y
+        else:
+            assert down_reward is not None and up_reward is not None, "Either return_y or down_reward and up_reward must be provided"
+
+        self.left_reward = left_reward
+        self.right_reward = right_reward
+        self.down_reward = down_reward
+        self.up_reward = up_reward
 
     def _make_spec(self):
         self.observation_spec = Composite(
@@ -185,8 +208,6 @@ class ToyEnv(EnvBase):
 
         reward = (
             (normal_reward + constraint_reward)
-            if self.constraints_active
-            else normal_reward
         )
 
         out = TensorDict(
@@ -202,13 +223,18 @@ class ToyEnv(EnvBase):
         return out
 
     @staticmethod
-    def calculate_xy(n_states, shortcut_steps, return_x, return_y, big_reward, gamma):
+    def calculate_x(n_states, shortcut_steps, return_x, big_reward, gamma):
         assert (n_states-1) % shortcut_steps == 0, "n_states must be 1 more than a multiple of shortcut_steps"
         nx = n_states - 1 # Number of times we need to step 'right' to reach the end
-        ny = (n_states - 1) // shortcut_steps # Number of times we need to step 'up' to reach the end
         x = (return_x - big_reward * gamma**(nx-1)) / sum(gamma**k for k in range(0, nx))
+        return x
+
+    @staticmethod
+    def calculate_y(n_states, shortcut_steps, return_y, big_reward, gamma):
+        assert (n_states-1) % shortcut_steps == 0, "n_states must be 1 more than a multiple of shortcut_steps"
+        ny = (n_states - 1) // shortcut_steps # Number of times we need to step 'up' to reach the end
         y = (return_y - big_reward * gamma**(ny-1)) / sum(gamma**k for k in range(0, ny))
-        return x, y
+        return y
 
     def calc_optimal_qvalues(self, constraints_active, tol=1e-6):
         qvalues = torch.zeros(self.n_states, self.n_actions)
@@ -231,114 +257,28 @@ class ToyEnv(EnvBase):
             delta = (qvalues - old_Q).abs().max().item()
         return qvalues
 
-from collections import defaultdict
-from typing import Optional
+    def calc_optimal_policy(self, constraints_active, tol=1e-6):
+        qvalues = self.calc_optimal_qvalues(constraints_active, tol)
+        return qvalues[:-1].argmax(dim=-1)
 
-import numpy as np
-import torch
-import tqdm
-from tensordict import TensorDict, TensorDictBase
-from tensordict.nn import TensorDictModule
-from torch import nn
+    def get_env(env_config):
+        """
+        Factory method for creating a ToyEnv instance. Wraps the environment in a TransformedEnv instance.
+        """
 
-from torchrl.data import Bounded, Composite, Unbounded
-from torchrl.envs import (
-    CatTensors,
-    EnvBase,
-    Transform,
-    TransformedEnv,
-    UnsqueezeTransform,
-)
-from torchrl.envs.transforms.transforms import _apply_to_composite
-from torchrl.envs.utils import check_env_specs, step_mdp
+        env_config = env_config.copy() # Copy the config to avoid modifying the original
 
-def angle_normalize(x):
-    return ((x + torch.pi) % (2 * torch.pi)) - torch.pi
+        max_steps = env_config.pop("max_steps")
 
-DEFAULT_X = 0
-DEFAULT_Y = 0
-
-class WorkingEnv(EnvBase):
-
-    batch_locked = True
-
-    def __init__(self, batch_size, seed=None, device="cpu"):
-
-        super().__init__(device=device, batch_size=batch_size)
-
-        self._make_spec()
-
-        if seed is None:
-            seed = torch.empty((), dtype=torch.int64).random_().item()
-        self.set_seed(seed)
-
-
-    @staticmethod
-    def _step(tensordict):
-        th, thdot = tensordict["th"], tensordict["thdot"]  # th := theta
-
-        reward = torch.zeros_like(th, dtype=torch.float32).unsqueeze(-1)
-        done = torch.zeros_like(th, dtype=torch.bool)
-        out = TensorDict(
-            {
-                "th": th,
-                "thdot": thdot,
-                "reward": reward,
-                "done": done,
-            },
-            tensordict.shape,
+        env = ToyEnv(
+            **env_config
         )
-        return out
 
-    def _reset(self, td):
-        if td is None:
-            batch_size = self.batch_size
-        else:
-            batch_size = td.shape
-        # th = torch.zeros(self.batch_size, 1)
-        th = torch.zeros(*batch_size, 1)
-        # thdot = torch.zeros(self.batch_size, 1)
-        thdot = torch.zeros(*batch_size, 1)
-        out = TensorDict(
-            {
-                "th": th,
-                "thdot": thdot,
-            },
-            # batch_size=self.batch_size
-            batch_size=batch_size
+        env = TransformedEnv(
+            env,
+            Compose(
+                StepCounter(max_steps=max_steps),
+            )
         )
-        return out
 
-    def _make_spec(self):
-        # Under the hood, this will populate self.output_spec["observation"]
-        self.observation_spec = Composite(
-            th=Bounded(
-                low=-torch.pi,
-                high=torch.pi,
-                shape=(*self.batch_size, 1),
-                dtype=torch.float32,
-            ),
-            thdot=Bounded(
-                low=0,
-                high=0,
-                shape=(*self.batch_size, 1),
-                dtype=torch.float32,
-            ),
-            shape=self.batch_size,
-        )
-        # since the environment is stateless, we expect the previous output as input.
-        # For this, ``EnvBase`` expects some state_spec to be available
-        self.state_spec = self.observation_spec.clone()
-        # action-spec will be automatically wrapped in input_spec when
-        # `self.action_spec = spec` will be called supported
-        self.action_spec = Bounded(
-            low=0,
-            high=0,
-            shape=(*self.batch_size,1),
-            dtype=torch.float32,
-        )
-        self.reward_spec = Unbounded(shape=(*self.batch_size,1))
-
-    def _set_seed(self, seed: Optional[int]):
-        rng = torch.manual_seed(seed)
-        self.rng = rng
+        return env
