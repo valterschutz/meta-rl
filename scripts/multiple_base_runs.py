@@ -64,7 +64,7 @@ def main():
 
     collector_config = {}
     collector_config["batch_size"] = 64
-    collector_config["total_frames"] = 100_000
+    collector_config["total_frames"] = 10_000
     collector_config["random_frames"] = 0
     collector_config["device"] = env_config["device"]
 

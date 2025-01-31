@@ -194,7 +194,7 @@ class ToyEnv(EnvBase):
             )
             constraint_reward = torch.where(
                 mask,
-                constraint_rewards[action_name] * torch.ones_like(constraint_reward),
+                constraint_rewards[action_name] * torch.ones_like(constraint_reward, device=self.device),
                 constraint_reward,
             )
 
@@ -237,9 +237,9 @@ class ToyEnv(EnvBase):
         return y
 
     def calc_optimal_qvalues(self, constraints_active, tol=1e-6):
-        qvalues = torch.zeros(self.n_states, self.n_actions)
-        states = torch.arange(self.n_states-1).repeat(self.n_actions)
-        actions = torch.arange(self.n_actions).repeat_interleave(self.n_states-1)
+        qvalues = torch.zeros(self.n_states, self.n_actions, device=self.device)
+        states = torch.arange(self.n_states-1, device=self.device).repeat(self.n_actions)
+        actions = torch.arange(self.n_actions, device=self.device).repeat_interleave(self.n_states-1)
         td = TensorDict({
             "observation": states.unsqueeze(-1),
             "action": F.one_hot(actions, num_classes=self.n_actions),

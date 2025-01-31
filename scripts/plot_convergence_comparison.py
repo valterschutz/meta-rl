@@ -104,6 +104,13 @@ for type, multiple_run_data in pkl["multiple_run_data"].items():
 # Convert into dataframe
 df = pd.DataFrame(d)
 
+sns.lineplot(
+    data=df,
+    x="batch",
+    y="non-constrained qvalue offset",
+    hue="type",
+)
+plt.show()
 
 sns.lineplot(
     data=df,
@@ -116,7 +123,15 @@ plt.show()
 sns.lineplot(
     data=df,
     x="batch",
-    y="non-constrained qvalue offset",
+    y="non-constrained policy offset",
+    hue="type",
+)
+plt.show()
+
+sns.lineplot(
+    data=df,
+    x="batch",
+    y="constrained policy offset",
     hue="type",
 )
 plt.show()
