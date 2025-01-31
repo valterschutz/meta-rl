@@ -1000,27 +1000,28 @@ def fast_policy(td):
 
 class Agent(Protocol):
     """
-    Interface for agents used by OffpolicyTrainer
+    Interface for agents. Every agent should be able to process a batch of data, and also have a policy for both training and evaluation.
     """
+
     def process_batch(self, td, constraints_active):
         """
         Update agent's beliefs using one batch of data.
         """
         ...
 
+    # @property
+    # def min_buffer_size(self) -> int:
+    #     """
+    #     Minimum buffer size before training can begin.
+    #     """
+    #     ...
+
     @property
-    def min_buffer_size(self) -> int:
-        """
-        Minimum buffer size before training can begin.
-        """
+    def train_policy(self) -> TensorDictModuleBase:
         ...
 
     @property
-    def train_policy(self, td: TensorDictBase) -> TensorDictModuleBase:
-        ...
-
-    @property
-    def eval_policy(self, td: TensorDictBase) -> TensorDictModuleBase:
+    def eval_policy(self) -> TensorDictModuleBase:
         ...
 
 class ToyTabularQAgent(Agent):
@@ -1031,7 +1032,7 @@ class ToyTabularQAgent(Agent):
         self.gamma = agent_gamma
         self.lr = lr
         self.epsilon = epsilon
-        self.min_buffer_size
+        # self.min_buffer_size
 
         # self.replay_buffer = TensorDictReplayBuffer(
         #     storage=LazyTensorStorage(max_size=replay_buffer_size, device=self.device),
@@ -1040,6 +1041,17 @@ class ToyTabularQAgent(Agent):
         #     batch_size=rb_batch_size,
         # )
         self.num_optim_steps = num_optim_steps
+
+        self._train_policy = TensorDictModule(self.train_policy_fn, in_keys=["observation"], out_keys=["action"])
+        self._eval_policy = TensorDictModule(self.eval_policy_fn, in_keys=["observation"], out_keys=["action"])
+
+    @property
+    def train_policy(self):
+        return self._train_policy
+
+    @property
+    def eval_policy(self):
+        return self._eval_policy
 
     def process_batch(self, td, constraints_active):
         # Add td to replay buffer
@@ -1071,30 +1083,34 @@ class ToyTabularQAgent(Agent):
     def train_policy_fn(self, obs):
         # Epsilon-greedy policy
         if random.random() < self.epsilon:
-            action = torch.randint(4, (1,))
+            action = torch.randint(4, obs.shape, device=self.device)
         else:
             action = self.qvalues[obs].argmax(-1)
+        # Note that we discard the last dimension of obs, since it's always a singleton dimension
+        # If obs has shape (B, 1), then we want the action (after one-hot) to have shape (B, 4)
+        action = action.squeeze(-1)
         return F.one_hot(action, num_classes=4)
 
     def eval_policy_fn(self, obs):
         action = self.qvalues[obs].argmax(-1)
+        action = action.squeeze(-1)
         return F.one_hot(action, num_classes=4)
 
-    @property
-    def min_buffer_size(self):
-        return 0
+    # @property
+    # def min_buffer_size(self):
+    #     return 0
 
     # @property
     # def train_policy(self):
     #     return self._train_policy
 
-    def train_policy(self, td):
-        td["action"] = self.train_policy_fn(td["observation"])
-        return td
+    # def train_policy(self, td):
+    #     td["action"] = self.train_policy_fn(td["observation"])
+    #     return td
 
-    def eval_policy(self, td):
-        td["action"] = self.eval_policy_fn(td["observation"])
-        return td
+    # def eval_policy(self, td):
+    #     td["action"] = self.eval_policy_fn(td["observation"])
+    #     return td
 
     # @property
     # def eval_policy(self):

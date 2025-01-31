@@ -74,13 +74,13 @@ def get_trainer(env_config, agent_config, collector_config):
         agent=agent,
         logger=ToyTabularQLogger(env, agent),
         progress_bar=True,
-        collector_device=collector_config["device"],
         max_eval_steps=env_config["max_steps"],
         collector_args={
             "batch_size": collector_config["batch_size"],
             "total_frames": collector_config["total_frames"],
+            "random_frames": collector_config["random_frames"],
+            "device": collector_config["device"],
         },
-        env_gamma=env_config["env_gamma"],
         eval_env=None
     )
     return trainer
@@ -108,13 +108,14 @@ def main():
 
     collector_config = {}
     collector_config["batch_size"] = 64
-    collector_config["total_frames"] = 1_000_000
+    collector_config["total_frames"] = 500_000
+    collector_config["random_frames"] = 0
     collector_config["device"] = env_config["device"]
 
     agent_config = {}
     agent_config["agent_gamma"] = env_config["env_gamma"]
     agent_config["lr"] = 1e-2
-    agent_config["epsilon"] = 0.1
+    agent_config["epsilon"] = 0.5
     agent_config["replay_buffer_size"] = 1000
     agent_config["device"] = env_config["device"]
     agent_config["rb_alpha"] = 0.7
@@ -122,8 +123,8 @@ def main():
     agent_config["rb_batch_size"] = 64
     agent_config["num_optim_steps"] = 1
 
-    unconstrained_result_dicts = multiple_runs(times_to_train=1, env_config=env_config, agent_config=agent_config, collector_config=collector_config, when_constraints_active=1.0, times_to_eval=10)
-    # constrained_result_dicts = multiple_runs(times_to_train=1, env_config=env_config, agent_config=agent_config, collector_config=collector_config, when_constraints_active=0.0)
+    # unconstrained_result_dicts = multiple_runs(times_to_train=1, env_config=env_config, agent_config=agent_config, collector_config=collector_config, when_constraints_active=1.0, times_to_eval=10)
+    constrained_result_dicts = multiple_runs(times_to_train=1, env_config=env_config, agent_config=agent_config, collector_config=collector_config, when_constraints_active=0.0, times_to_eval=10)
 
 
     # Pickle the data

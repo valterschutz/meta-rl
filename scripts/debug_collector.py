@@ -32,14 +32,6 @@ def main():
     )
     check_env_specs(env)
 
-    # rand_collector = SyncDataCollector(
-    #     env,
-    #     None,
-    #     frames_per_batch=64,
-    #     total_frames=640,
-    #     split_trajs=False,
-    #     device="cpu",
-    # )
     agent = ToyTabularQAgent(
         n_states=16,
         agent_gamma=0.99,
@@ -54,12 +46,21 @@ def main():
     )
     collector = SyncDataCollector(
         env,
+        # None,
         agent.train_policy,
         frames_per_batch=64,
         total_frames=640,
         split_trajs=False,
         device="cpu",
     )
+    # collector = SyncDataCollector(
+    #     env,
+    #     agent.train_policy,
+    #     frames_per_batch=64,
+    #     total_frames=640,
+    #     split_trajs=False,
+    #     device="cpu",
+    # )
 
     for td in collector:
         pass

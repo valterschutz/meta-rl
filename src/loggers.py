@@ -44,11 +44,16 @@ class ToyTabularQLogger(Logger):
         self.optimal_non_constrained_qvalues = self.env.calc_optimal_qvalues(constraints_active=False)
         self.optimal_constrained_qvalues = self.env.calc_optimal_qvalues(constraints_active=True)
 
+        self.optimal_non_constrained_policy = self.optimal_non_constrained_qvalues[:-1].argmax(dim=-1)
+        self.optimal_constrained_policy = self.optimal_constrained_qvalues[:-1].argmax(dim=-1)
+
 
     def train_log(self, td):
         self.batch_count += 1
         self.history["qvalues"].append(self.agent.qvalues.clone())
         self.history["epsilon"].append(self.agent.epsilon)
+
+        policy = self.agent.qvalues[:-1].argmax(dim=-1)
 
 
         wandb.log({
@@ -56,6 +61,8 @@ class ToyTabularQLogger(Logger):
             "mean qvalue": self.agent.qvalues[:-1].mean().item(),
             "mean qvalue non-constrained optimal offset": (self.agent.qvalues[:-1] - self.optimal_non_constrained_qvalues[:-1]).mean().item(),
             "mean qvalue constrained optimal offset": (self.agent.qvalues[:-1] - self.optimal_constrained_qvalues[:-1]).mean().item(),
+            "non-constrained policy offset": (policy - self.optimal_non_constrained_policy).abs().sum().item(),
+            "constrained policy offset": (policy - self.optimal_constrained_policy).abs().sum().item(),
             "state distribution": wandb.Histogram(td["next", "observation"].cpu()),
             "action distribution": wandb.Histogram(td["action"].argmax(dim=-1).cpu()),
             "preferred actions according to qvalues": wandb.Histogram(self.agent.qvalues[:-1].argmax(dim=-1).cpu()),
@@ -69,19 +76,19 @@ class ToyTabularQLogger(Logger):
         })
 
     def eval_log(self, td):
-        fig, axs = plt.subplots(1, 3)
-        fig.subplots_adjust(wspace=0.5)
-        p0 = axs[0].imshow(self.agent.qvalues[:-1])
-        axs[0].set_yticks(np.arange(self.agent.qvalues.shape[0]-1), self.agent.qvalues[:-1].argmax(dim=-1).numpy())
-        axs[0].set_title("Agent Q values")
-        fig.colorbar(p0, ax=axs[0])
-        p1 = axs[1].imshow(self.optimal_qvalues[:-1])
-        axs[1].set_yticks(np.arange(self.optimal_qvalues.shape[0]-1), self.optimal_qvalues[:-1].argmax(dim=-1).numpy())
-        axs[1].set_title("Optimal Q values")
-        fig.colorbar(p1, ax=axs[1])
-        p2 = axs[2].imshow(self.agent.qvalues[:-1]-self.optimal_qvalues[:-1])
-        axs[2].set_title("Q value offset")
-        fig.colorbar(p2, ax=axs[2])
+        # fig, axs = plt.subplots(1, 3)
+        # fig.subplots_adjust(wspace=0.5)
+        # p0 = axs[0].imshow(self.agent.qvalues[:-1])
+        # axs[0].set_yticks(np.arange(self.agent.qvalues.shape[0]-1), self.agent.qvalues[:-1].argmax(dim=-1).numpy())
+        # axs[0].set_title("Agent Q values")
+        # fig.colorbar(p0, ax=axs[0])
+        # p1 = axs[1].imshow(self.optimal_qvalues[:-1])
+        # axs[1].set_yticks(np.arange(self.optimal_qvalues.shape[0]-1), self.optimal_qvalues[:-1].argmax(dim=-1).numpy())
+        # axs[1].set_title("Optimal Q values")
+        # fig.colorbar(p1, ax=axs[1])
+        # p2 = axs[2].imshow(self.agent.qvalues[:-1]-self.optimal_qvalues[:-1])
+        # axs[2].set_title("Q value offset")
+        # fig.colorbar(p2, ax=axs[2])
 
         # eval_normal_return = calc_return((td["next", "normal_reward"]).flatten(), self.env.gamma)
         # eval_true_return = calc_return((td["next", "normal_reward"]+td["next","constraint_reward"]).flatten(), self.env.gamma)
@@ -90,9 +97,10 @@ class ToyTabularQLogger(Logger):
             # "eval normal return": eval_normal_return,
             # "eval true return": eval_true_return,
         # })
-        wandb.log({
-            "qvalues": wandb.Image(fig),
-        })
+        # wandb.log({
+        #     "qvalues": wandb.Image(fig),
+        # })
+        pass
 
     def dump(self):
         return self.history

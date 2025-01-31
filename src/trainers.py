@@ -21,6 +21,7 @@ from torchrl.data.replay_buffers import (ListStorage, PrioritizedSampler,
                                          ReplayBuffer)
 from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
 from torchrl.data.replay_buffers.storages import LazyTensorStorage
+from torchrl.envs import EnvBase
 from torchrl.envs import (Compose, DMControlEnv, DoubleToFloat,
                           ObservationNorm, ParallelEnv, StepCounter,
                           TransformedEnv, set_gym_backend)
@@ -44,7 +45,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "./"))
 from envs.toy_env import ToyEnv
 from envs.dm_env import ConstraintDMControlEnv
 from utils import calc_return, timed_iterator
-from agents.base_agents import ToySACAgent, PointSACAgent, ReacherSACAgent
+from agents.base_agents import ToySACAgent, PointSACAgent, ReacherSACAgent, Agent
+from loggers import Logger
 
 
 # TODO: rewrite to use OffpolicyTrainer
@@ -176,15 +178,18 @@ def train_toy_base_agent(device, total_frames, min_buffer_size, n_states, big_re
 
 
 class OffpolicyTrainer():
-    def __init__(self, env, agent, logger, progress_bar, collector_device, max_eval_steps, collector_args, env_gamma, eval_env=None):
+    def __init__(self, env: EnvBase, agent: Agent, logger: Logger, progress_bar, max_eval_steps, collector_args, eval_env: EnvBase=None):
         self.env = env
         self.agent = agent
+        self.logger = logger
+        self.progress_bar = progress_bar
+
+        # Used during training to see how far we are
         self.total_frames = collector_args["total_frames"]
         self.n_batches = self.total_frames // collector_args["batch_size"]
-        self.logger = logger
+
         self.max_eval_steps = max_eval_steps
-        self.progress_bar = progress_bar
-        self.env_gamma = env_gamma
+        # self.env_gamma = env_gamma
         if eval_env is None:
             self.eval_env = env
         else:
@@ -194,18 +199,18 @@ class OffpolicyTrainer():
             env,
             None,
             frames_per_batch=collector_args["batch_size"],
-            total_frames=agent.min_buffer_size,
+            total_frames=collector_args["random_frames"],
             split_trajs=False,
-            device=collector_device,
+            device=collector_args["device"],
         )
 
         self.collector = SyncDataCollector(
             env,
             agent.train_policy,
             frames_per_batch=collector_args["batch_size"],
-            total_frames=self.total_frames-agent.min_buffer_size,
+            total_frames=self.total_frames-collector_args["random_frames"],
             split_trajs=False,
-            device=collector_device,
+            device=collector_args["device"],
         )
 
     def train(self, when_constraints_active, times_to_eval):
@@ -248,38 +253,12 @@ class OffpolicyTrainer():
                 "train_log_time": train_log_time,
             })
 
-            # loss_dicts.append(loss_dict)
-            # grad_dicts.append(grad_dict)
-            # train_info_dict = self.agent.train_info_dict_callback(td)
-            # train_info_dicts.append(train_info_dict)
-
-            # if self.log:
-            #     wandb.log({
-            #         "normal_reward": td["next", "normal_reward"].mean().item(),
-            #         "constraint_reward": td["next", "constraint_reward"].mean().item(),
-            #         "true_reward": (td["next", "normal_reward"] + td["next", "constraint_reward"]).mean().item(),
-            #         "batch": i,
-            #         **loss_dict,
-            #         **grad_dict,
-            #         **train_info_dict,
-            #         **agent.info_dict_callback(td),
-            #     })
             if self.eval_every_n_batch is not None and i % self.eval_every_n_batch == 0:
                 eval_start_time = time.time()
                 with torch.no_grad(), set_exploration_type(InteractionType.DETERMINISTIC):
                     eval_td = self.eval_env.rollout(self.max_eval_steps, self.agent.eval_policy)
                 eval_time = time.time() - eval_start_time
-                # Always use constrained return for evaluation
-                # eval_info_dict = self.agent.eval_info_dict_callback(eval_data)
-                # eval_info_dicts.append(eval_info_dict)
-                # if self.log:
-                #     wandb.log({
-                #         "batch": i,
-                #         **eval_info_dict
-                #     })
-                # # If evaluation env is pixelated, record video
-                # if "pixels" in eval_data:
-                #     wandb.log({"video": wandb.Video(eval_data["pixels"].permute(0, 3, 1, 2).cpu(), fps=30)})
+
                 eval_log_start_time = time.time()
                 self.logger.eval_log(eval_td)
                 eval_log_time = time.time() - eval_log_start_time
@@ -291,16 +270,6 @@ class OffpolicyTrainer():
 
             if self.progress_bar:
                 pbar.update(td.numel())
-        # except KeyboardInterrupt as e:
-        #     print(f"Training interrupted.")
-        #     if self.progress_bar:
-        #         pbar.close()
-        # return {
-        #     "loss_dicts": loss_dicts,
-        #     "grad_dicts": grad_dicts,
-        #     "train_info_dicts": train_info_dicts,
-        #     "eval_info_dicts": eval_info_dicts
-        # }
 
 def log_video(td, i):
     """
