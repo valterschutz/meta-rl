@@ -46,41 +46,13 @@ n_states = 16
 # Load pickles
 with open(f"data/{date}|{n_states}-states.pkl", "rb") as f:
     pkl = pd.read_pickle(f)
-    # unconstrained_result_dicts pkl["unconstrained_result_dicts"]
-    # constrained_result_dicts = pkl["constrained_result_dicts"]
-    # toggled_result_dicts = pkl["toggled_result_dicts"]
-    # env_config = pkl["env_config"]
 
 # Create an identical environment as during training
 env = ToyEnv.get_env(pkl["env_config"])
 
-# The pickles are lists ("run" dimension) of dictionaries.
-
 # Policy matrices for "slow" and "fast" policies, excluding the terminal state
 optimal_non_constrained_policy = env.calc_optimal_policy(constraints_active=False)
 optimal_constrained_policy = env.calc_optimal_policy(constraints_active=True)
-
-
-# def qvalues_to_policy_matrix(qvalues):
-#     indices = qvalues.argmax(dim=-1)
-#     policy = F.one_hot(indices, num_classes=4)
-#     # Exclude the terminal state
-#     return policy[:-1]
-
-# The pickle was saved using
-#
-
-# pickle.dump({
-#     "multiple_run_data": {
-#         "unconstrained": unconstrained_multiple_run_data,
-#         "constrained": constrained_multiple_run_data,
-#         "toggled": toggled_multiple_run_data
-#     },
-#     "env_config": env_config,
-# }, f)
-# where the "multiple_run_data" are lists of histories, each element pertaining to the history of a specific run. The histories are dictionaries and contain various string keys, for example "slow_dst" and "fast_dst", and the values are lists of metrics during the run.
-
-# From this data, create a pandas dataframe with the columns "run", "batch", "distance to slow policy", "distance to fast policy", "type" (either "constrained" or "unconstrained")
 
 d = []
 for type, multiple_run_data in pkl["multiple_run_data"].items():
@@ -95,43 +67,57 @@ for type, multiple_run_data in pkl["multiple_run_data"].items():
 
 
 # Add a new column "distance to optimal policy" which is "distance to slow policy" if "type" is "constrained" and "distance to fast policy" if "type" is "unconstrained"
-# for i in range(len(d)):
-#     if d[i]["type"] == "constrained":
-#         d[i]["optimal qvalue offset"] = d[i]["constrainted qvalue offset"]
-#     else:
-#         d[i]["optimal qvalue offset"] = d[i]["constrainted qvalue offset"]
+for i in range(len(d)):
+    if d[i]["type"] == "constrained":
+        d[i]["optimal qvalue offset"] = float(d[i]["constrained qvalue offset"])
+        d[i]["optimal policy offset"] = float(d[i]["constrained policy offset"])
+    else:
+        d[i]["optimal qvalue offset"] = float(d[i]["non-constrained qvalue offset"])
+        d[i]["optimal policy offset"] = float(d[i]["non-constrained policy offset"])
+
+
 
 # Convert into dataframe
 df = pd.DataFrame(d)
 
-sns.lineplot(
-    data=df,
-    x="batch",
-    y="non-constrained qvalue offset",
-    hue="type",
-)
-plt.show()
+# Normalize the "optimal policy offsets" such that they all start at 1 at batch 0
+for (run, type_), group in df.groupby(["run", "type"]):
+    initial_value = group[group["batch"] == 0]["optimal policy offset"].values[0]
+    df.loc[(df["run"] == run) & (df["type"] == type_), "optimal policy offset"] /= initial_value
+
+# sns.lineplot(
+#     data=df,
+#     x="batch",
+#     y="non-constrained qvalue offset",
+#     hue="type",
+# )
+# plt.show()
+
+# sns.lineplot(
+#     data=df,
+#     x="batch",
+#     y="constrained qvalue offset",
+#     hue="type",
+# )
+
+# sns.lineplot(
+#     data=df,
+#     x="batch",
+#     y="non-constrained policy offset",
+#     hue="type",
+# )
+
+# sns.lineplot(
+#     data=df,
+#     x="batch",
+#     y="constrained policy offset",
+#     hue="type",
+# )
 
 sns.lineplot(
     data=df,
     x="batch",
-    y="constrained qvalue offset",
-    hue="type",
-)
-plt.show()
-
-sns.lineplot(
-    data=df,
-    x="batch",
-    y="non-constrained policy offset",
-    hue="type",
-)
-plt.show()
-
-sns.lineplot(
-    data=df,
-    x="batch",
-    y="constrained policy offset",
+    y="optimal policy offset",
     hue="type",
 )
 plt.show()
